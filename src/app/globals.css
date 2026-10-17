@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/* Reserve Juggler design tokens — dark-first institutional treasury palette */
+:root {
+  --background: #070d1a;
+  --surface: #0c1526;
+  --surface-2: #111d33;
+  --border: #1e2d4a;
+  --foreground: #e6ecf7;
+  --muted: #8a9bb8;
+  --primary: #3b82f6;
+  --primary-soft: #1d3a6e;
+  --positive: #34d399;
+  --warning: #fbbf24;
+  --negative: #f87171;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-soft: var(--primary-soft);
+  --color-positive: var(--positive);
+  --color-warning: var(--warning);
+  --color-negative: var(--negative);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in {
+    animation: fade-in 220ms ease-out both;
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
