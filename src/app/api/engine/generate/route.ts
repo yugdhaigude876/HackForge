@@ -15,9 +15,16 @@ import {
 import { generateTransactions } from "@/engine/generator";
 import { Money } from "@/engine/money";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { type OrgAuthContext } from "@/server/auth";
+import { transactionsRepo } from "@/server/repositories/transactions";
+import { auditRepo } from "@/server/repositories/audit";
+import { canonicalJsonHash } from "@/server/repositories/common";
 
 export const POST = withAuth(
-  async function generateRoute(request: NextRequest): Promise<NextResponse> {
+  async function generateRoute(
+    request: NextRequest,
+    authContext: OrgAuthContext
+  ): Promise<NextResponse> {
     try {
       let rawBody: unknown;
       try {
@@ -72,8 +79,55 @@ export const POST = withAuth(
         transactionsPerHour: data.transactionsPerHour,
       });
 
+      // Persist generated transactions and write audit log
+      let persisted = false;
+      let audited = false;
+
+      try {
+        await transactionsRepo.batchInsert(
+          authContext.orgId,
+          transactions.map((tx) => ({
+            ts: tx.timestamp,
+            type: tx.type.toLowerCase() as "deposit" | "withdrawal" | "settlement",
+            amount: tx.amount.amountMinor.toString(),
+            source: "synthetic",
+            seed: typeof data.seed === "number" ? data.seed : undefined,
+          })),
+          authContext.user.uid
+        );
+        persisted = true;
+
+        try {
+          const refPath = `orgs/${authContext.orgId}/transactions`;
+          const afterHash = canonicalJsonHash({
+            orgId: authContext.orgId,
+            seed: data.seed,
+            count: transactions.length,
+            startDate: startDate.toISOString(),
+            endDate: endDate.toISOString(),
+          });
+
+          await auditRepo.append(authContext.orgId, {
+            actorUid: authContext.user.uid,
+            action: "transactions.generate",
+            refPath,
+            afterHash,
+          });
+          audited = true;
+        } catch (auditErr) {
+          console.error("[generateRoute] Audit logging failed:", auditErr);
+          audited = false;
+        }
+      } catch (persistErr) {
+        console.error("[generateRoute] Transactions persistence failed:", persistErr);
+        persisted = false;
+        audited = false;
+      }
+
       return NextResponse.json({
         success: true,
+        persisted,
+        audited,
         count: transactions.length,
         timespan: {
           startDate: startDate.toISOString(),

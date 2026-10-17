@@ -25,11 +25,12 @@ export function formatMinor(minor: Minor): string {
 /**
  * Compact display, e.g. $12.4M. Display only; never feed back into calculations.
  */
-export function formatCompactMinor(minor: Minor | Money): string {
+export function formatCompactMinor(minor: Minor | bigint | string | Money): string {
   if (minor instanceof Money) {
     return minor.formatCompact();
   }
-  const dollars = (typeof minor === "bigint" ? Number(minor) : minor) / 100;
+  const num = typeof minor === "string" ? Number(minor) : typeof minor === "bigint" ? Number(minor) : minor;
+  const dollars = num / 100;
   const abs = Math.abs(dollars);
   const sign = dollars < 0 ? "-" : "";
   if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;

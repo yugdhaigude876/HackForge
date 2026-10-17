@@ -6,21 +6,26 @@ export function Panel({
   title,
   description,
   sample,
+  headerAction,
   children,
 }: {
   title: string;
   description?: string;
   sample?: boolean;
+  headerAction?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <Card className="fade-in">
       <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
           {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
         </div>
-        {sample && <Badge tone="info">Sample data</Badge>}
+        <div className="flex items-center gap-2">
+          {sample && <Badge tone="info">Sample data</Badge>}
+          {headerAction}
+        </div>
       </div>
       <div className="p-4">{children}</div>
     </Card>

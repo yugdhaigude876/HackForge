@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { Menu, X, LogOut, User as UserIcon } from "lucide-react";
 import { Badge, Button } from "@/components/ui/primitives";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { navItems } from "./nav";
@@ -104,6 +105,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
           <p className="text-sm text-muted">Digital bank · USD</p>
           <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
             {isMock ? (
               <Badge tone="info">Demo Auth</Badge>
             ) : user ? (

@@ -106,7 +106,7 @@ export const ForecastDocSchema = z.object({
 export const DecisionDocSchema = z.object({
   id: z.string().min(1),
   orgId: z.string().min(1),
-  forecastId: z.string().min(1),
+  forecastId: z.string().optional().default("none"),
   confidence: z.number(),
   reserveMinor: z.string().regex(/^-?\d+$/, "reserveMinor must be a decimal integer string"),
   surplusMinor: z.string().regex(/^-?\d+$/, "surplusMinor must be a decimal integer string"),

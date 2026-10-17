@@ -39,7 +39,7 @@ export interface DecisionRecord {
 
 export interface CreateDecisionInput {
   id?: string;
-  forecastId: string;
+  forecastId?: string;
   confidence: number;
   reserve: Money | string | bigint | number;
   surplus: Money | string | bigint | number;
@@ -63,7 +63,7 @@ export const decisionsRepo = {
     firestore?: Firestore
   ): Promise<DecisionRecord> {
     const validOrgId = validateId(orgId, "orgId");
-    const validForecastId = validateId(input.forecastId, "forecastId");
+    const validForecastId = validateId(input.forecastId ?? "none", "forecastId");
     const validActor = validateId(actorUid, "actorUid");
     const db = firestore ?? getAdminFirestore();
 

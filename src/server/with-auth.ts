@@ -11,7 +11,12 @@ import {
   ForbiddenError,
 } from "./auth";
 
-export type ApiErrorCode = "UNAUTHENTICATED" | "FORBIDDEN" | "VALIDATION_ERROR" | "INTERNAL";
+export type ApiErrorCode =
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "VALIDATION_ERROR"
+  | "INTERNAL"
+  | "NOT_FOUND";
 
 export interface ApiErrorPayload {
   ok: false;
@@ -52,9 +57,10 @@ export interface WithAuthOptions {
   minRole?: OrgRole;
 }
 
-export type AuthenticatedHandler = (
+export type AuthenticatedHandler<T = unknown> = (
   request: NextRequest,
-  context: OrgAuthContext
+  context: OrgAuthContext,
+  routeProps?: T
 ) => Promise<NextResponse> | NextResponse;
 
 /**
@@ -63,13 +69,16 @@ export type AuthenticatedHandler = (
  * 2. Organisation membership & minimum role via x-org-id header (never trusted from request body).
  * 3. Consistent, typed error envelope on failures ({ ok: false, error: { code, message } }).
  */
-export function withAuth(
-  handler: AuthenticatedHandler,
+export function withAuth<T = unknown>(
+  handler: AuthenticatedHandler<T>,
   options: WithAuthOptions = {}
-): (request: NextRequest) => Promise<NextResponse> {
+): (request: NextRequest, routeProps?: T) => Promise<NextResponse> {
   const minRole = options.minRole ?? "analyst";
 
-  return async function authenticatedRoute(request: NextRequest): Promise<NextResponse> {
+  return async function authenticatedRoute(
+    request: NextRequest,
+    routeProps?: T
+  ): Promise<NextResponse> {
     try {
       // 1. Extract & validate organisation ID from headers
       const rawOrgId = request.headers.get("x-org-id");
@@ -96,7 +105,7 @@ export function withAuth(
       const authContext = await requireOrgMember(request, orgId, minRole);
 
       // 3. Delegate to route handler
-      return await handler(request, authContext);
+      return await handler(request, authContext, routeProps);
     } catch (error) {
       if (error instanceof UnauthenticatedError) {
         return createErrorResponse(401, "UNAUTHENTICATED", error.message);

@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:rules": "firebase emulators:exec --project demo-reserve-juggler \"vitest run --config vitest.rules.config.mts\""
+    "test:rules": "firebase emulators:exec --project demo-reserve-juggler \"vitest run --config vitest.rules.config.mts\"",
+    "seed:member": "node scripts/seed-member.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

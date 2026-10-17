@@ -91,8 +91,38 @@ Implemented under `src/server/repositories/` using Firebase Admin Firestore, gua
 6. **Immutable Audit Trail**: `auditRepo` exposes only `append`, `get`, and `list` methods. It intentionally does not provide `update` or `delete` methods.
 7. **Injectable Handles**: Repositories accept an optional `firestore?: Firestore` instance, defaulting to `getAdminFirestore()` (which supports in-memory stub injection via `setAdminFirestore`).
 
+## Persistence & Audit Trail (Phase 16)
+
+### Route-Level Persistence Flow
+Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and `/api/engine/generate` persists the computed result using the Phase 15 Firestore repositories and records an append-only audit log:
+1. **Forecasts**: `forecastsRepo.create` persists method, parameters, cutoff timestamp (`asOf`), horizon, predicted points, and residual quantiles/backtest metrics.
+2. **Decisions**: `decisionsRepo.create` stores `forecastId` link, statistical confidence level, required reserve, deployable surplus, individual instrument allocations, operational status (`HEALTHY`, `UNDER_RESERVED`, `LOW_CONFIDENCE`), expected net yield, and human-readable explanation.
+3. **Audit Hashes**: Every persisted record generates an immutable audit record via `auditRepo.append` capturing:
+   - `actorUid`: ID of the authenticated user invoking the route.
+   - `action`: e.g. `"forecast.create"`, `"decision.create"`, `"transactions.generate"`.
+   - `refPath`: Full Firestore document path (`orgs/{orgId}/decisions/{id}`).
+   - `afterHash`: Deterministic SHA-256 hash computed over recursively key-sorted canonical JSON (`canonicalJsonHash`), ensuring tamper-evident immutability.
+4. **Persistence Failure Policy**: If computation succeeds but Firestore persistence fails, routes return HTTP 200 with `persisted: false`, `audited: false`, and a generic warning (`warning`), keeping detailed errors server-side only. If document persistence succeeds but audit logging fails, `persisted: true` and `audited: false` are surfaced.
+
+### Read Endpoints
+- `GET /api/decisions`: Lists decisions ordered newest first with bounded pagination (`limit` query param, clamped between 20 and 100). Minimum role: `viewer`.
+- `GET /api/decisions/[id]`: Retrieves a single decision record by ID within the authenticated organisation. Minimum role: `viewer`.
+- **JSON-Safe Serialization**: Repositories convert immutable `Money` instances to decimal string minor units, preventing raw BigInt serialization failures in `JSON.stringify`.
+
+## Design System & Theming (Phase 16)
+
+### Dual-Theme Mechanism
+- Controlled via `data-theme="dark" | "light"` on `<html>`.
+- Zero-dependency inline script in `<head>` of `src/app/layout.tsx` inspects `localStorage.getItem("reserve-juggler.theme")` and falls back to `prefers-color-scheme`, eliminating flash of unstyled content (anti-FOUC).
+- Wrapped in try/catch to gracefully tolerate restricted storage contexts (e.g. private browsing).
+
+### Palette Specifications
+- **Dark Theme**: Navy surfaces (`#0a101d`, `#0e1628`, `#152238`), thin borders (`#212c45`), sky blue accent (`#38bdf8`), subtle amber reserve highlight, and emerald surplus tones.
+- **Light Theme**: Soft warm off-white background (`#f3f1ec`), surface (`#faf9f6`), secondary surface (`#efece5`), soft borders (`#ded9cd`), deep navy ink text (`#1d2638`), and muted text (`#667085`), meeting WCAG AA contrast without harsh contrast.
+- **Chart Theming**: Recharts SVG props consume dynamic theme tokens via `useChartTheme()`, providing responsive stroke, fill, and tooltip contrast in both themes.
+
 ## Deployment
 Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
 ## Current Implementation Status
-Phases 1 through 15 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision), Route Handlers (`/api/engine/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, and repository unit tests.
+Phases 1 through 16 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision), Route Handlers (`/api/engine/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), and responsive dashboard redesign. Tested with 239 Vitest unit/integration tests and visual browser subagent verification.

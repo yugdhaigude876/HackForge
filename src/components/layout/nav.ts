@@ -1,4 +1,13 @@
-import { Activity, BarChart3, Gauge, Layers, Settings, SlidersHorizontal, TrendingUp, type LucideIcon } from "lucide-react";
+import {
+  Activity,
+  Gauge,
+  Layers,
+  ScrollText,
+  Settings,
+  SlidersHorizontal,
+  TrendingUp,
+  type LucideIcon,
+} from "lucide-react";
 
 export interface NavItem {
   href: string;
@@ -14,6 +23,6 @@ export const navItems: NavItem[] = [
   { href: "/reserve", label: "Reserve", icon: Layers, phase: 5 },
   { href: "/optimizer", label: "Optimizer", icon: SlidersHorizontal, phase: 5 },
   { href: "/twin", label: "Digital Twin", icon: Activity, phase: 6 },
-  { href: "/analytics", label: "Analytics", icon: BarChart3, phase: 7 },
+  { href: "/audit", label: "Audit Trail", icon: ScrollText, phase: 16 },
   { href: "/settings", label: "Settings", icon: Settings, phase: 2 },
 ];

@@ -224,6 +224,9 @@ export const DecisionRequestSchema = z.object({
   /** Currency code */
   currency: z.string().min(3).max(3).optional().default("USD"),
 
+  /** Optional forecast ID linkage */
+  forecastId: z.string().optional(),
+
   /** Optional override thresholds */
   thresholds: z
     .object({

@@ -36,9 +36,16 @@ import {
 } from "@/engine/reserve";
 import { Money } from "@/engine/money";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { type OrgAuthContext } from "@/server/auth";
+import { decisionsRepo } from "@/server/repositories/decisions";
+import { auditRepo } from "@/server/repositories/audit";
+import { canonicalJsonHash } from "@/server/repositories/common";
 
 export const POST = withAuth(
-  async function decisionRoute(request: NextRequest): Promise<NextResponse> {
+  async function decisionRoute(
+    request: NextRequest,
+    authContext: OrgAuthContext
+  ): Promise<NextResponse> {
     try {
       let rawBody: unknown;
       try {
@@ -180,8 +187,82 @@ export const POST = withAuth(
 
       const decision = evaluateLiquidityDecision(context);
 
+      // Persist decision calculation and write audit log
+      let persisted = false;
+      let audited = false;
+      let decisionId: string | undefined = undefined;
+
+      try {
+        let totalExpectedYieldMinor = 0n;
+        const mappedAllocations = (decision.allocations ?? []).map((a) => {
+          const amtMinor = a.allocated ? a.allocated.amountMinor : 0n;
+          const apyFraction = a.instrument.apy > 1 ? a.instrument.apy / 10000 : a.instrument.apy;
+          const annualYield = BigInt(Math.round(Number(amtMinor) * apyFraction));
+          const horizonH = BigInt(context.horizonHours ?? 24);
+          totalExpectedYieldMinor += (annualYield * horizonH) / (365n * 24n);
+
+          return {
+            instrumentId: a.instrument.id,
+            amount: amtMinor.toString(),
+          };
+        });
+
+        const savedDecision = await decisionsRepo.create(
+          authContext.orgId,
+          {
+            forecastId: data.forecastId,
+            confidence: 1 - alpha,
+            reserve: decision.requiredReserve.amountMinor.toString(),
+            surplus: decision.deployableSurplus.amountMinor.toString(),
+            allocations: mappedAllocations,
+            status: decision.status,
+            expectedNetYield: totalExpectedYieldMinor.toString(),
+            explanation: decision.explanation,
+          },
+          authContext.user.uid
+        );
+        decisionId = savedDecision.id;
+        persisted = true;
+
+        try {
+          const refPath = `orgs/${authContext.orgId}/decisions/${decisionId}`;
+          const afterHash = canonicalJsonHash({
+            id: decisionId,
+            orgId: authContext.orgId,
+            status: decision.status,
+            requiredReserve: decision.requiredReserve.amountMinor.toString(),
+            deployableSurplus: decision.deployableSurplus.amountMinor.toString(),
+            allocations: mappedAllocations,
+          });
+
+          await auditRepo.append(authContext.orgId, {
+            actorUid: authContext.user.uid,
+            action: "decision.create",
+            refPath,
+            afterHash,
+          });
+          audited = true;
+        } catch (auditErr) {
+          console.error("[decisionRoute] Audit logging failed:", auditErr);
+          audited = false;
+        }
+      } catch (persistErr) {
+        console.error("[decisionRoute] Decision persistence failed:", persistErr);
+        persisted = false;
+        audited = false;
+      }
+
       return NextResponse.json({
         success: true,
+        id: decisionId,
+        persisted,
+        audited,
+        ...(persisted
+          ? {}
+          : {
+              warning:
+                "Decision evaluated successfully but could not be persisted to the organisation store.",
+            }),
         decision,
       });
     } catch (error) {

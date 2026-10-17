@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { Timestamp } from "firebase-admin/firestore";
 import { Money } from "@/engine/money";
 
@@ -127,3 +128,35 @@ export function decimalStringToMoney(val: string | number | bigint, currency = "
     );
   }
 }
+
+/**
+ * Computes a deterministic SHA-256 hash of a JSON-serializable value.
+ * Recursively sorts object keys so equivalent payloads yield identical hashes.
+ */
+export function canonicalJsonHash(data: unknown): string {
+  function stringifyCanonical(val: unknown): string {
+    if (val === null || typeof val !== "object") {
+      return JSON.stringify(val);
+    }
+    if (val instanceof Date) {
+      return JSON.stringify(val.toISOString());
+    }
+    if (typeof (val as { toDate?: unknown }).toDate === "function") {
+      return JSON.stringify((val as { toDate: () => Date }).toDate().toISOString());
+    }
+    if (Array.isArray(val)) {
+      return "[" + val.map(stringifyCanonical).join(",") + "]";
+    }
+    const keys = Object.keys(val as Record<string, unknown>).sort();
+    return (
+      "{" +
+      keys
+        .map((k) => JSON.stringify(k) + ":" + stringifyCanonical((val as Record<string, unknown>)[k]))
+        .join(",") +
+      "}"
+    );
+  }
+
+  return createHash("sha256").update(stringifyCanonical(data)).digest("hex");
+}
+

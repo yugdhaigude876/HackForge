@@ -1,6 +1,6 @@
 import "server-only";
 
-import { initializeApp, getApps, cert, type App, type ServiceAccount } from "firebase-admin/app";
+import { initializeApp, getApps, cert, applicationDefault, type App, type ServiceAccount } from "firebase-admin/app";
 import { getAuth, type Auth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
@@ -71,13 +71,28 @@ export function getAdminApp(): App {
     return cachedAdminApp;
   }
 
-  const credentials = parseServiceAccount();
-  cachedAdminApp = initializeApp({
-    credential: cert(credentials),
-    projectId: credentials.projectId,
-  });
+  const rawSa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  if (rawSa) {
+    const credentials = parseServiceAccount();
+    cachedAdminApp = initializeApp({
+      credential: cert(credentials),
+      projectId: credentials.projectId,
+    });
+    return cachedAdminApp;
+  }
 
-  return cachedAdminApp;
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    cachedAdminApp = initializeApp({
+      credential: applicationDefault(),
+      projectId: projectId || undefined,
+    });
+    return cachedAdminApp;
+  }
+
+  throw new MissingFirebaseAdminConfigError(
+    "FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set. Server Firebase Admin credentials are required."
+  );
 }
 
 /**

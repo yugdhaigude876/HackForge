@@ -27,9 +27,16 @@ import {
 } from "@/engine/forecast";
 import { Money } from "@/engine/money";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { type OrgAuthContext } from "@/server/auth";
+import { forecastsRepo } from "@/server/repositories/forecasts";
+import { auditRepo } from "@/server/repositories/audit";
+import { canonicalJsonHash } from "@/server/repositories/common";
 
 export const POST = withAuth(
-  async function forecastRoute(request: NextRequest): Promise<NextResponse> {
+  async function forecastRoute(
+    request: NextRequest,
+    authContext: OrgAuthContext
+  ): Promise<NextResponse> {
     try {
       let rawBody: unknown;
       try {
@@ -150,8 +157,89 @@ export const POST = withAuth(
       const activeHistory = series.slice(-lookbackHours);
       const predictions = forecaster.predict(activeHistory, horizonHours);
 
+      // 7. Persist forecast run and write audit log
+      let persisted = false;
+      let audited = false;
+      let forecastId: string | undefined = undefined;
+
+      try {
+        const asOfDate = new Date(series[series.length - 1].hourStart);
+        const asOfMs = asOfDate.getTime();
+
+        const savedForecast = await forecastsRepo.create(
+          authContext.orgId,
+          {
+            method: data.method,
+            params: {
+              lookbackHours,
+              horizonHours,
+              stepHours,
+              seasonalLag: data.seasonalLag,
+              lambda: data.lambda,
+              mode: data.mode,
+            },
+            asOf: asOfDate,
+            horizon: horizonHours,
+            points: predictions.map((p, idx) => ({
+              ts: new Date(asOfMs + (idx + 1) * 60 * 60 * 1000),
+              mean: p.amountMinor,
+            })),
+            residualQuantiles: {
+              mase: backtest.metrics.mase,
+              maeMinor: backtest.metrics.maeMinor,
+              maeDollars: backtest.metrics.maeDollars,
+              pinballLoss95: backtest.metrics.pinballLoss95,
+              pinballLoss99: backtest.metrics.pinballLoss99,
+            },
+            backtest: {
+              mase: backtest.metrics.mase,
+              pinball: backtest.metrics.pinballLoss95,
+            },
+          },
+          authContext.user.uid
+        );
+        forecastId = savedForecast.id;
+        persisted = true;
+
+        try {
+          const refPath = `orgs/${authContext.orgId}/forecasts/${forecastId}`;
+          const afterHash = canonicalJsonHash({
+            id: forecastId,
+            orgId: authContext.orgId,
+            method: data.method,
+            asOf: savedForecast.asOf.toISOString(),
+            horizon: horizonHours,
+            metrics: backtest.metrics,
+          });
+
+          await auditRepo.append(authContext.orgId, {
+            actorUid: authContext.user.uid,
+            action: "forecast.create",
+            refPath,
+            afterHash,
+          });
+          audited = true;
+        } catch (auditErr) {
+          console.error("[forecastRoute] Audit logging failed:", auditErr);
+          audited = false;
+        }
+      } catch (persistErr) {
+        console.error("[forecastRoute] Forecast persistence failed:", persistErr);
+        persisted = false;
+        audited = false;
+      }
+
       return NextResponse.json({
         success: true,
+        id: forecastId,
+        persisted,
+        audited,
+        ...(persisted
+          ? {}
+          : {
+              warning:
+                "Result computed successfully but could not be persisted to the organisation store.",
+            }),
         method: data.method,
         horizonHours,
         lookbackHours,
