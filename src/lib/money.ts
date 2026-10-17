@@ -1,16 +1,35 @@
-/** Money is held as integer minor units (cents). Phase 3 replaces this with the full engine money module. */
+/**
+ * Compatibility re-export and helper utilities for UI components.
+ * The core financial engine resides in @/engine/money.
+ */
+
+export * from "@/engine/money";
+import { Money } from "@/engine/money";
+
 export type Minor = number;
 
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const usdWhole = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
 
-/** Format integer minor units (cents) as whole-dollar currency. Display only. */
+/**
+ * Format integer minor units (cents) as whole-dollar currency. Display only.
+ */
 export function formatMinor(minor: Minor): string {
-  return usd.format(Math.trunc(minor / 100));
+  const num = typeof minor === "bigint" ? Number(minor) : minor;
+  return usdWhole.format(Math.trunc(num / 100));
 }
 
-/** Compact display, e.g. $12.4M. Display only; never feed back into calculations. */
-export function formatCompactMinor(minor: Minor): string {
-  const dollars = minor / 100;
+/**
+ * Compact display, e.g. $12.4M. Display only; never feed back into calculations.
+ */
+export function formatCompactMinor(minor: Minor | Money): string {
+  if (minor instanceof Money) {
+    return minor.formatCompact();
+  }
+  const dollars = (typeof minor === "bigint" ? Number(minor) : minor) / 100;
   const abs = Math.abs(dollars);
   const sign = dollars < 0 ? "-" : "";
   if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
