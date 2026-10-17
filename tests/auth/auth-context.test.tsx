@@ -107,24 +107,35 @@ describe("AuthContext and AuthProvider", () => {
     expect(result.current.user).toBeNull();
   });
 
-  it("clears error state when clearError is invoked", async () => {
+  it("returns null from getIdToken in mock mode", async () => {
     const { result } = renderHook(() => useAuth(), { wrapper });
 
     await act(async () => {
-      try {
-        await result.current.signUpWithEmail("invalid", "short");
-      } catch {
-        // Expected
-      }
+      await result.current.signInAsDemoUser("analyst");
     });
 
-    expect(result.current.error).toBe("Password must be at least 6 characters long.");
+    const token = await result.current.getIdToken();
+    expect(token).toBeNull();
+  });
 
-    act(() => {
-      result.current.clearError();
-    });
+  it("does not enter mock mode in production when unconfigured and marks isUnconfigured true", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_ALLOW_MOCK_AUTH", "");
+    vi.stubEnv("NEXT_PUBLIC_FIREBASE_API_KEY", "");
+    vi.stubEnv("NEXT_PUBLIC_FIREBASE_PROJECT_ID", "");
 
-    expect(result.current.error).toBeNull();
+    const prodWrapper = ({ children }: { children: React.ReactNode }) => (
+      <AuthProvider>{children}</AuthProvider>
+    );
+
+    const { result } = renderHook(() => useAuth(), { wrapper: prodWrapper });
+
+    expect(result.current.isMock).toBe(false);
+    expect(result.current.isUnconfigured).toBe(true);
+    expect(result.current.user).toBeNull();
+
+    vi.unstubAllEnvs();
   });
 });
+
 

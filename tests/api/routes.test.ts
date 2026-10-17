@@ -1,29 +1,202 @@
 /**
  * Reserve Juggler - API Route Handlers Integration Test Suite
  *
- * Verifies end-to-end request parsing, Zod validation, HTTP status codes (200, 400),
- * Money serialization through the Next.js NextResponse boundary, and core engine orchestration:
+ * Verifies end-to-end request parsing, Zod validation, HTTP status codes (200, 400, 401, 403, 500),
+ * Token verification, Organisation role authorization, Money serialization,
+ * and core engine orchestration:
  * - POST /api/engine/generate
  * - POST /api/engine/forecast
  * - POST /api/engine/decision
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { POST as generateHandler } from "@/app/api/engine/generate/route";
 import { POST as forecastHandler } from "@/app/api/engine/forecast/route";
 import { POST as decisionHandler } from "@/app/api/engine/decision/route";
+import {
+  setTokenVerifier,
+  setMembershipStore,
+  resetAuthOverrides,
+  type TokenVerifier,
+  type MembershipStore,
+  type AuthenticatedUser,
+  type OrgRole,
+} from "@/server/auth";
 
-function createJsonRequest(url: string, body: unknown): NextRequest {
+class TestTokenVerifier implements TokenVerifier {
+  tokens: Record<string, AuthenticatedUser> = {
+    "valid-analyst-token": { uid: "analyst-1", email: "analyst@bank.internal" },
+    "valid-admin-token": { uid: "admin-1", email: "admin@bank.internal" },
+    "valid-viewer-token": { uid: "viewer-1", email: "viewer@bank.internal" },
+    "outsider-token": { uid: "outsider-1", email: "outsider@evil.com" },
+  };
+
+  async verifyIdToken(token: string, checkRevoked = true): Promise<AuthenticatedUser> {
+    if (token === "expired-token") throw new Error("Firebase ID token has expired.");
+    if (token === "revoked-token" && checkRevoked) throw new Error("Firebase ID token has been revoked.");
+    const user = this.tokens[token];
+    if (!user) throw new Error("Invalid token signature.");
+    return user;
+  }
+}
+
+class TestMembershipStore implements MembershipStore {
+  memberships: Record<string, Record<string, OrgRole>> = {
+    org_treasury: {
+      "analyst-1": "analyst",
+      "admin-1": "admin",
+      "viewer-1": "viewer",
+    },
+  };
+
+  async getRole(orgId: string, uid: string): Promise<OrgRole | null> {
+    return this.memberships[orgId]?.[uid] ?? null;
+  }
+}
+
+function createJsonRequest(
+  url: string,
+  body: unknown,
+  options?: { token?: string | null; orgId?: string | null }
+): NextRequest {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = options?.token !== undefined ? options.token : "valid-analyst-token";
+  const orgId = options?.orgId !== undefined ? options.orgId : "org_treasury";
+
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (orgId) headers["x-org-id"] = orgId;
+
   return new NextRequest(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
 
+describe("API Security & Authorization: Token and Org Authorization", () => {
+  const BASE_URL = "http://localhost:3000/api/engine/generate";
+  const validPayload = {
+    seed: "auth-security-test-seed",
+    startDate: "2026-03-01T00:00:00Z",
+    endDate: "2026-03-01T02:00:00Z",
+  };
+
+  beforeEach(() => {
+    resetAuthOverrides();
+    setTokenVerifier(new TestTokenVerifier());
+    setMembershipStore(new TestMembershipStore());
+  });
+
+  it("returns 401 UNAUTHENTICATED when Authorization header is missing", async () => {
+    const req = createJsonRequest(BASE_URL, validPayload, { token: null });
+    const res = await generateHandler(req);
+
+    expect(res.status).toBe(401);
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("UNAUTHENTICATED");
+    expect(json.error.message).toContain("Missing Authorization header");
+  });
+
+  it("returns 401 UNAUTHENTICATED when Authorization header is malformed", async () => {
+    const req = new NextRequest(BASE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "NotABearerToken",
+        "x-org-id": "org_treasury",
+      },
+      body: JSON.stringify(validPayload),
+    });
+    const res = await generateHandler(req);
+
+    expect(res.status).toBe(401);
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("UNAUTHENTICATED");
+  });
+
+  it("returns 401 UNAUTHENTICATED when token is invalid, expired, or revoked", async () => {
+    const expiredReq = createJsonRequest(BASE_URL, validPayload, { token: "expired-token" });
+    const expiredRes = await generateHandler(expiredReq);
+    expect(expiredRes.status).toBe(401);
+    const expiredJson = await expiredRes.json();
+    expect(expiredJson.error.code).toBe("UNAUTHENTICATED");
+
+    const revokedReq = createJsonRequest(BASE_URL, validPayload, { token: "revoked-token" });
+    const revokedRes = await generateHandler(revokedReq);
+    expect(revokedRes.status).toBe(401);
+    const revokedJson = await revokedRes.json();
+    expect(revokedJson.error.code).toBe("UNAUTHENTICATED");
+
+    const invalidReq = createJsonRequest(BASE_URL, validPayload, { token: "bogus-signature" });
+    const invalidRes = await generateHandler(invalidReq);
+    expect(invalidRes.status).toBe(401);
+  });
+
+  it("returns 403 FORBIDDEN when user has valid token but is not a member of org", async () => {
+    const req = createJsonRequest(BASE_URL, validPayload, { token: "outsider-token" });
+    const res = await generateHandler(req);
+
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("FORBIDDEN");
+    expect(json.error.message).toContain("not a member");
+  });
+
+  it("returns 403 FORBIDDEN when user is viewer but route requires analyst", async () => {
+    const req = createJsonRequest(BASE_URL, validPayload, { token: "valid-viewer-token" });
+    const res = await generateHandler(req);
+
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("FORBIDDEN");
+    expect(json.error.message).toContain("Required minimum role: 'analyst'");
+  });
+
+  it("returns 200 when user role is analyst or admin", async () => {
+    const analystReq = createJsonRequest(BASE_URL, validPayload, { token: "valid-analyst-token" });
+    const analystRes = await generateHandler(analystReq);
+    expect(analystRes.status).toBe(200);
+
+    const adminReq = createJsonRequest(BASE_URL, validPayload, { token: "valid-admin-token" });
+    const adminRes = await generateHandler(adminReq);
+    expect(adminRes.status).toBe(200);
+  });
+
+  it("returns 400 VALIDATION_ERROR when x-org-id header is missing", async () => {
+    const req = createJsonRequest(BASE_URL, validPayload, { orgId: null });
+    const res = await generateHandler(req);
+
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.message).toContain("Missing required 'x-org-id' header");
+  });
+
+  it("returns 400 VALIDATION_ERROR when x-org-id contains invalid characters", async () => {
+    const req = createJsonRequest(BASE_URL, validPayload, { orgId: "org/invalid;drop table" });
+    const res = await generateHandler(req);
+
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
 describe("API Route: POST /api/engine/generate", () => {
   const BASE_URL = "http://localhost:3000/api/engine/generate";
+
+  beforeEach(() => {
+    resetAuthOverrides();
+    setTokenVerifier(new TestTokenVerifier());
+    setMembershipStore(new TestMembershipStore());
+  });
 
   it("returns 200 and generates transactions with deterministic seed and date range", async () => {
     const req = createJsonRequest(BASE_URL, {
@@ -79,9 +252,10 @@ describe("API Route: POST /api/engine/generate", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
-    expect(json.details).toBeInstanceOf(Array);
-    expect(json.details.some((d: { path?: string[] }) => d.path?.includes("seed"))).toBe(true);
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.details).toBeInstanceOf(Array);
+    expect(json.error.details.some((d: { path?: string[] }) => d.path?.includes("seed"))).toBe(true);
   });
 
   it("returns 400 when startDate is after endDate", async () => {
@@ -95,14 +269,19 @@ describe("API Route: POST /api/engine/generate", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
-    expect(json.details[0].message).toContain("startDate must be before or equal to endDate");
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.details[0].message).toContain("startDate must be before or equal to endDate");
   });
 
   it("returns 400 on invalid JSON syntax in request body", async () => {
     const req = new NextRequest(BASE_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer valid-analyst-token",
+        "x-org-id": "org_treasury",
+      },
       body: "{ not-a-valid-json ",
     });
 
@@ -110,12 +289,20 @@ describe("API Route: POST /api/engine/generate", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Invalid JSON in request body");
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.message).toBe("Invalid JSON in request body");
   });
 });
 
 describe("API Route: POST /api/engine/forecast", () => {
   const BASE_URL = "http://localhost:3000/api/engine/forecast";
+
+  beforeEach(() => {
+    resetAuthOverrides();
+    setTokenVerifier(new TestTokenVerifier());
+    setMembershipStore(new TestMembershipStore());
+  });
 
   it("returns 200 with Hour-of-Week EWMA smoothing forecast and rolling backtest", async () => {
     const req = createJsonRequest(BASE_URL, {
@@ -188,8 +375,9 @@ describe("API Route: POST /api/engine/forecast", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
-    expect(json.details.some((d: { path?: string[] }) => d.path?.includes("method"))).toBe(true);
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.details.some((d: { path?: string[] }) => d.path?.includes("method"))).toBe(true);
   });
 
   it("returns 400 for invalid horizon (e.g. horizon > 720)", async () => {
@@ -201,8 +389,9 @@ describe("API Route: POST /api/engine/forecast", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
-    expect(json.details.some((d: { path?: string[] }) => d.path?.includes("horizonHours"))).toBe(true);
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.details.some((d: { path?: string[] }) => d.path?.includes("horizonHours"))).toBe(true);
   });
 
   it("returns 400 when start date is after end date", async () => {
@@ -215,12 +404,19 @@ describe("API Route: POST /api/engine/forecast", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
   });
 });
 
 describe("API Route: POST /api/engine/decision", () => {
   const BASE_URL = "http://localhost:3000/api/engine/decision";
+
+  beforeEach(() => {
+    resetAuthOverrides();
+    setTokenVerifier(new TestTokenVerifier());
+    setMembershipStore(new TestMembershipStore());
+  });
 
   const sampleInstruments = [
     {
@@ -243,10 +439,10 @@ describe("API Route: POST /api/engine/decision", () => {
 
   it("returns 200 with HEALTHY status and optimized allocations when C >= R", async () => {
     const req = createJsonRequest(BASE_URL, {
-      availableCash: "150000000.00", // $150M available
-      operationalFloor: "20000000.00", // $20M floor
-      expectedCumulativeFlow: "5000000.00", // +$5M expected net inflows
-      worstCaseResidualShortfall: "-10000000.00", // -$10M worst shortfall
+      availableCash: "150000000.00",
+      operationalFloor: "20000000.00",
+      expectedCumulativeFlow: "5000000.00",
+      worstCaseResidualShortfall: "-10000000.00",
       sampleSize: 45,
       mase: 0.85,
       instruments: sampleInstruments,
@@ -259,8 +455,6 @@ describe("API Route: POST /api/engine/decision", () => {
     expect(json.success).toBe(true);
     expect(json.decision.status).toBe("HEALTHY");
 
-    // R = max(0, -(5M - 10M)) + 20M = 5M + 20M = 25M
-    // C = 150M >= 25M -> Surplus = 125M
     expect(json.decision.requiredReserve.amountMinor).toBe(25_000_000_00);
     expect(json.decision.deployableSurplus.amountMinor).toBe(125_000_000_00);
     expect(json.decision.allocations.length).toBeGreaterThan(0);
@@ -271,19 +465,19 @@ describe("API Route: POST /api/engine/decision", () => {
     const activeHoldings = [
       {
         instrument: sampleInstruments[0],
-        currentAmount: "30000000.00", // $30M in Overnight Repo (0.05% penalty, instant)
+        currentAmount: "30000000.00",
       },
       {
         instrument: sampleInstruments[1],
-        currentAmount: "20000000.00", // $20M in Commercial Paper (0.20% penalty, 4h)
+        currentAmount: "20000000.00",
       },
     ];
 
     const req = createJsonRequest(BASE_URL, {
-      availableCash: "10000000.00", // Only $10M liquid cash
-      operationalFloor: "30000000.00", // $30M floor
-      expectedCumulativeFlow: "-15000000.00", // -$15M expected outflow
-      worstCaseResidualShortfall: "-10000000.00", // -$10M tail risk
+      availableCash: "10000000.00",
+      operationalFloor: "30000000.00",
+      expectedCumulativeFlow: "-15000000.00",
+      worstCaseResidualShortfall: "-10000000.00",
       sampleSize: 50,
       mase: 0.9,
       holdings: activeHoldings,
@@ -297,16 +491,13 @@ describe("API Route: POST /api/engine/decision", () => {
     expect(json.success).toBe(true);
     expect(json.decision.status).toBe("UNDER_RESERVED");
 
-    // Required reserve R = max(0, -(-25M)) + 30M = 55M
-    // Cash = 10M -> Deficit = 45M
     expect(json.decision.reserveGap.amountMinor).toBe(45_000_000_00);
     expect(json.decision.deployableSurplus.amountMinor).toBe(0);
     expect(json.decision.allocations).toHaveLength(0);
 
-    // Liquidation solver should generate orders prioritizing lowest penalty
     const plan = json.decision.liquidationPlan;
     expect(plan.orders.length).toBeGreaterThan(0);
-    expect(plan.orders[0].instrumentId).toBe("treasury-repo"); // Lowest penalty first
+    expect(plan.orders[0].instrumentId).toBe("treasury-repo");
     expect(plan.totalNetRecoveredCash.amountMinor).toBeGreaterThan(0);
   });
 
@@ -316,8 +507,8 @@ describe("API Route: POST /api/engine/decision", () => {
       operationalFloor: "20000000.00",
       expectedCumulativeFlow: "0.00",
       worstCaseResidualShortfall: "-5000000.00",
-      sampleSize: 15, // Low sample size (< 30)
-      mase: 1.65, // High error score (> 1.20)
+      sampleSize: 15,
+      mase: 1.65,
       instruments: sampleInstruments,
     });
 
@@ -334,8 +525,6 @@ describe("API Route: POST /api/engine/decision", () => {
   });
 
   it("runs the full end-to-end pipeline automatically when parameters are omitted", async () => {
-    // Only supply bank cash & floor: route should synthesize data, run forecaster backtest,
-    // calculate residual quantiles, and formulate decision
     const req = createJsonRequest(BASE_URL, {
       availableCash: "80000000.00",
       operationalFloor: "15000000.00",
@@ -364,8 +553,9 @@ describe("API Route: POST /api/engine/decision", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
-    expect(json.details.some((d: { path?: string[] }) => d.path?.includes("availableCash"))).toBe(true);
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.details.some((d: { path?: string[] }) => d.path?.includes("availableCash"))).toBe(true);
   });
 
   it("returns 400 when negative cash is provided", async () => {
@@ -378,7 +568,8 @@ describe("API Route: POST /api/engine/decision", () => {
     expect(res.status).toBe(400);
 
     const json = await res.json();
-    expect(json.error).toBe("Validation Error");
-    expect(json.details[0].message).toContain("non-negative");
+    expect(json.ok).toBe(false);
+    expect(json.error.code).toBe("VALIDATION_ERROR");
+    expect(json.error.details[0].message).toContain("non-negative");
   });
 });

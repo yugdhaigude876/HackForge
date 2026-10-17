@@ -10,7 +10,7 @@ import {
   signOut as fbSignOut,
   type User as FirebaseUser,
 } from "firebase/auth";
-import { isFirebaseConfigured, getFirebaseAuth, getGoogleAuthProvider } from "./client";
+import { isMockModeActive, isAuthUnconfigured, getFirebaseAuth, getGoogleAuthProvider } from "./client";
 import { type AuthUser, type AuthContextValue, type DemoRole, DEMO_USERS } from "./types";
 
 const MOCK_STORAGE_KEY = "reserve_juggler_mock_auth_user";
@@ -90,7 +90,10 @@ export interface AuthProviderProps {
 }
 
 export function AuthProvider({ children, initialUser, forceMock }: AuthProviderProps) {
-  const isMock = forceMock || !isFirebaseConfigured();
+  const isUnconfigured = !forceMock && isAuthUnconfigured();
+  const isMock = forceMock || isMockModeActive();
+
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [user, setUser] = useState<AuthUser | null>(() => {
     if (initialUser !== undefined) return initialUser;
     if (isMock) {
@@ -99,7 +102,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
     return null;
   });
   const [loading, setLoading] = useState<boolean>(() => {
-    if (initialUser !== undefined || isMock) return false;
+    if (initialUser !== undefined || isMock || isUnconfigured) return false;
     return true;
   });
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +111,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
 
   // Listen to Firebase auth external system
   useEffect(() => {
-    if (initialUser !== undefined || isMock) {
+    if (initialUser !== undefined || isMock || isUnconfigured) {
       return;
     }
 
@@ -119,9 +122,10 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
 
     const unsubscribe = onAuthStateChanged(
       auth,
-      (firebaseUser) => {
-        if (firebaseUser) {
-          setUser(mapFirebaseUser(firebaseUser));
+      (fbUser) => {
+        setFirebaseUser(fbUser);
+        if (fbUser) {
+          setUser(mapFirebaseUser(fbUser));
         } else {
           setUser(null);
         }
@@ -134,20 +138,39 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
     );
 
     return () => unsubscribe();
-  }, [isMock, initialUser]);
+  }, [isMock, isUnconfigured, initialUser]);
 
+  const getIdToken = useCallback(
+    async (forceRefresh = false): Promise<string | null> => {
+      if (isMock || isUnconfigured) {
+        return null;
+      }
+      if (firebaseUser) {
+        return await firebaseUser.getIdToken(forceRefresh);
+      }
+      const auth = getFirebaseAuth();
+      if (auth?.currentUser) {
+        return await auth.currentUser.getIdToken(forceRefresh);
+      }
+      return null;
+    },
+    [isMock, isUnconfigured, firebaseUser]
+  );
 
   const signInWithEmail = useCallback(
     async (email: string, password: string) => {
       setError(null);
       setLoading(true);
       try {
+        if (isUnconfigured) {
+          throw new Error("Authentication is not configured in this production environment.");
+        }
+
         const trimmedEmail = email.trim();
         if (!trimmedEmail) throw new Error("Email is required.");
         if (!password) throw new Error("Password is required.");
 
         if (isMock) {
-          // Mock login simulation with small realistic latency
           await new Promise((resolve) => setTimeout(resolve, 200));
           const name = trimmedEmail.split("@")[0] || "Treasury Analyst";
           const mockUser: AuthUser = {
@@ -165,6 +188,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
         const auth = getFirebaseAuth();
         if (!auth) throw new Error("Firebase Auth is not initialized.");
         const credential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+        setFirebaseUser(credential.user);
         setUser(mapFirebaseUser(credential.user));
       } catch (err) {
         const msg = translateAuthError(err);
@@ -174,7 +198,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
         setLoading(false);
       }
     },
-    [isMock],
+    [isMock, isUnconfigured],
   );
 
   const signUpWithEmail = useCallback(
@@ -182,6 +206,10 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
       setError(null);
       setLoading(true);
       try {
+        if (isUnconfigured) {
+          throw new Error("Authentication is not configured in this production environment.");
+        }
+
         const trimmedEmail = email.trim();
         if (!trimmedEmail) throw new Error("Email is required.");
         if (password.length < 6) throw new Error("Password must be at least 6 characters long.");
@@ -211,6 +239,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
             // Profile update non-fatal
           }
         }
+        setFirebaseUser(credential.user);
         setUser(mapFirebaseUser(credential.user));
       } catch (err) {
         const msg = translateAuthError(err);
@@ -220,20 +249,24 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
         setLoading(false);
       }
     },
-    [isMock],
+    [isMock, isUnconfigured],
   );
 
   const signInWithGoogle = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
+      if (isUnconfigured) {
+        throw new Error("Authentication is not configured in this production environment.");
+      }
+
       if (isMock) {
         await new Promise((resolve) => setTimeout(resolve, 250));
         const mockUser: AuthUser = {
           uid: `google-mock-${Date.now()}`,
           email: "alex.vance@institutional-treasury.com",
           displayName: "Alex Vance (Google Auth)",
-          photoURL: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop",
+          photoURL: null,
           role: "Institutional Risk Manager",
         };
         setUser(mockUser);
@@ -245,6 +278,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
       const provider = getGoogleAuthProvider();
       if (!auth || !provider) throw new Error("Firebase Google Auth is not configured.");
       const credential = await signInWithPopup(auth, provider);
+      setFirebaseUser(credential.user);
       setUser(mapFirebaseUser(credential.user));
     } catch (err) {
       const msg = translateAuthError(err);
@@ -253,13 +287,16 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
     } finally {
       setLoading(false);
     }
-  }, [isMock]);
+  }, [isMock, isUnconfigured]);
 
   const signInAsDemoUser = useCallback(
     async (role: DemoRole = "analyst") => {
       setError(null);
       setLoading(true);
       try {
+        if (isUnconfigured) {
+          throw new Error("Demo personas are disabled in unconfigured production environments.");
+        }
         await new Promise((resolve) => setTimeout(resolve, 150));
         const demoUser = DEMO_USERS[role];
         setUser(demoUser);
@@ -268,19 +305,20 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
         setLoading(false);
       }
     },
-    [],
+    [isUnconfigured],
   );
 
   const signOut = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      if (!isMock) {
+      if (!isMock && !isUnconfigured) {
         const auth = getFirebaseAuth();
         if (auth) {
           await fbSignOut(auth);
         }
       }
+      setFirebaseUser(null);
       setUser(null);
       setStoredMockUser(null);
     } catch (err) {
@@ -290,7 +328,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
     } finally {
       setLoading(false);
     }
-  }, [isMock]);
+  }, [isMock, isUnconfigured]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -298,6 +336,8 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
       loading,
       error,
       isMock,
+      isUnconfigured,
+      getIdToken,
       signInWithEmail,
       signUpWithEmail,
       signInWithGoogle,
@@ -305,7 +345,20 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
       signOut,
       clearError,
     }),
-    [user, loading, error, isMock, signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsDemoUser, signOut, clearError],
+    [
+      user,
+      loading,
+      error,
+      isMock,
+      isUnconfigured,
+      getIdToken,
+      signInWithEmail,
+      signUpWithEmail,
+      signInWithGoogle,
+      signInAsDemoUser,
+      signOut,
+      clearError,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

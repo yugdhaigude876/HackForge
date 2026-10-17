@@ -14,6 +14,8 @@ export interface AuthContextValue {
   loading: boolean;
   error: string | null;
   isMock: boolean;
+  isUnconfigured: boolean;
+  getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<void>;
   signInWithGoogle: () => Promise<void>;

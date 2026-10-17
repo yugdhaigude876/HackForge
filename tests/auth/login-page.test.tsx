@@ -94,4 +94,24 @@ describe("LoginForm Component", () => {
     expect(screen.getByText(/Please enter your email address/i)).toBeDefined();
   });
 
+  it("shows unconfigured state and hides demo personas when unconfigured in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_ALLOW_MOCK_AUTH", "");
+    vi.stubEnv("NEXT_PUBLIC_FIREBASE_API_KEY", "");
+    vi.stubEnv("NEXT_PUBLIC_FIREBASE_PROJECT_ID", "");
+
+    render(
+      <AuthProvider>
+        <LoginForm />
+      </AuthProvider>,
+    );
+
+    expect(screen.getByTestId("auth-unconfigured-state")).toBeDefined();
+    expect(screen.getByText("Authentication is not configured")).toBeDefined();
+    expect(screen.queryByText("One-Click Demo Personas")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign In to Terminal" })).toBeNull();
+
+    vi.unstubAllEnvs();
+  });
 });
+

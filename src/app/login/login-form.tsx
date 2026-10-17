@@ -27,6 +27,7 @@ export function LoginForm() {
     loading: authLoading,
     error: authError,
     isMock,
+    isUnconfigured,
     signInWithEmail,
     signUpWithEmail,
     signInWithGoogle,
@@ -144,7 +145,12 @@ export function LoginForm() {
           {/* Environment Status Badge */}
           <div className="mb-6 flex items-center justify-between border-b border-border pb-4 text-xs">
             <span className="text-muted">Auth Engine</span>
-            {isMock ? (
+            {isUnconfigured ? (
+              <Badge tone="warning" className="gap-1">
+                <AlertCircle className="h-3 w-3" />
+                Unconfigured
+              </Badge>
+            ) : isMock ? (
               <Badge tone="info" className="gap-1">
                 <Sparkles className="h-3 w-3" />
                 Local Mock Mode
@@ -156,6 +162,33 @@ export function LoginForm() {
               </Badge>
             )}
           </div>
+
+          {isUnconfigured ? (
+            <div className="space-y-4" data-testid="auth-unconfigured-state">
+              <div className="flex items-start gap-3 rounded-md border border-warning/40 bg-warning/10 p-4 text-xs text-warning">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-sm">Authentication is not configured</p>
+                  <p className="text-muted leading-relaxed">
+                    This production deployment does not have Firebase credentials configured, and mock authentication is disabled in production to fail closed.
+                  </p>
+                </div>
+              </div>
+              <div className="rounded-md border border-border bg-surface-2 p-3 text-xs space-y-2">
+                <p className="font-medium text-foreground">Required Environment Variables:</p>
+                <ul className="list-disc list-inside space-y-1 text-muted font-mono text-[11px]">
+                  <li>NEXT_PUBLIC_FIREBASE_API_KEY</li>
+                  <li>NEXT_PUBLIC_FIREBASE_PROJECT_ID</li>
+                  <li>FIREBASE_SERVICE_ACCOUNT_JSON (server)</li>
+                </ul>
+                <p className="text-[11px] text-muted pt-1">
+                  To allow mock authentication in testing/demo builds, set <code className="text-primary font-mono">NEXT_PUBLIC_ALLOW_MOCK_AUTH=true</code>.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+
 
           {/* Mode Switch Tabs */}
           <div className="mb-6 grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1 text-xs" role="tablist">
@@ -378,7 +411,11 @@ export function LoginForm() {
               </Button>
             </div>
           </div>
-        </Card>
+        </>
+      )}
+    </Card>
+
+
 
         {/* Security & Disclaimer Footer */}
         <p className="text-center text-[11px] text-muted">

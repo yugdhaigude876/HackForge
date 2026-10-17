@@ -39,17 +39,17 @@ Each phase ends with: tests pass, lint/tsc/build pass, docs updated.
 | 1 | Scaffold and tooling | Next.js, strict TS, Tailwind, lint | Done |
 | 2 | Design tokens and app shell | Sidebar, top bar, theme | Done |
 | 3 | Sample-data dashboard | KPI cards, chart, table, states | Done |
-| 4 | Money module and test setup | Integer/BigInt money, Vitest, unit tests | Todo |
-| 5 | Synthetic transaction generator | Seeded, reproducible deposits/withdrawals/settlements | Todo |
-| 6 | Hourly aggregation | Transactions to hourly net-flow series | Todo |
-| 7 | Baseline forecasters and backtest harness | Naive, seasonal naive, rolling-origin evaluation | Todo |
-| 8 | Hour-of-week smoothing forecaster | Model plus MASE and pinball metrics vs baseline | Todo |
-| 9 | Reserve calculation | Residual quantiles, reserve, deployable surplus | Todo |
-| 10 | Optimiser | Allocation across instruments with penalties and capacity | Todo |
-| 11 | Insufficient-funds and low-confidence handling | `UNDER_RESERVED`, `LOW_CONFIDENCE` paths | Todo |
-| 12 | API routes | Route Handlers plus Zod, typed responses | Todo |
-| 13 | Firebase client auth | Sign-in UI (needs Firebase project) | Todo |
-| 14 | Server auth and authorisation | ID-token verify, org membership checks | Todo |
+| 4 | Money module and test setup | Integer/BigInt money, Vitest, unit tests | Done |
+| 5 | Synthetic transaction generator | Seeded, reproducible deposits/withdrawals/settlements | Done |
+| 6 | Hourly aggregation | Transactions to hourly net-flow series | Done |
+| 7 | Baseline forecasters and backtest harness | Naive, seasonal naive, rolling-origin evaluation | Done |
+| 8 | Hour-of-week smoothing forecaster | Model plus MASE and pinball metrics vs baseline | Done |
+| 9 | Reserve calculation | Residual quantiles, reserve, deployable surplus | Done |
+| 10 | Optimiser | Allocation across instruments with penalties and capacity | Done |
+| 11 | Insufficient-funds and low-confidence handling | `UNDER_RESERVED`, `LOW_CONFIDENCE` paths | Done |
+| 12 | API routes | Route Handlers plus Zod, typed responses | Done |
+| 13 | Firebase client auth | Sign-in UI (needs Firebase project) | Done |
+| 14 | Server auth and authorisation | ID-token verify, org membership checks | Done |
 | 15 | Firestore repos and rules | Repositories, rules, emulator tests | Todo |
 | 16 | Persistence and audit | Save forecasts, decisions, audit records | Todo |
 | 17 | Wire dashboard to engine | Replace sample data with real engine output | Todo |

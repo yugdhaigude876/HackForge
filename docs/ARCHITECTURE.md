@@ -12,21 +12,53 @@
 ## Boundaries
 The browser never holds Admin credentials. The engine has no I/O so it is unit-testable and reusable by scripts. Route Handlers are thin adapters.
 
-## API design (planned)
-`POST /api/forecast`, `POST /api/reserve`, `POST /api/optimize`, `POST /api/simulate`, `GET /api/decisions`. Responses use a typed envelope `{ ok: true, data } | { ok: false, error: { code, message } }`. All inputs validated with Zod; money crosses the wire as integer strings (minor units).
+## API design
+Engine routes:
+- `POST /api/engine/generate` (minimum role: `analyst`)
+- `POST /api/engine/forecast` (minimum role: `analyst`)
+- `POST /api/engine/decision` (minimum role: `analyst`)
 
-## Auth
-Client signs in with Firebase Auth; sends the ID token as `Authorization: Bearer`. The server verifies it with the Admin SDK and checks org membership. Because the Admin SDK bypasses Firestore rules (verified in Firebase docs), authorisation is enforced in route code; rules additionally protect any direct client access.
+Responses use a typed envelope:
+- Success: `{ ok: true, data: ... }` (or route-specific success payload preserving engine output structure)
+- Failure: `{ ok: false, error: { code: "UNAUTHENTICATED" | "FORBIDDEN" | "VALIDATION_ERROR" | "INTERNAL", message: string, details?: unknown } }`
+
+All incoming payloads are strictly validated using Zod; money amounts cross the wire as integer strings in minor units (cents). Header `x-org-id` is required and validated against charset and length constraints.
+
+## Auth & Authorisation (Phase 14)
+
+### Authentication Flow
+1. **Client**: Authenticates via Firebase Auth (email/password or Google). The client-side wrapper in `src/lib/api-client.ts` (`apiFetch`) retrieves the JWT ID token using `getIdToken()`, and attaches it as `Authorization: Bearer <idToken>` alongside the `x-org-id` header.
+2. **Fail-Fast Client Handling**: When the user is signed out or operating in mock mode, `getIdToken()` resolves to `null`. In this state, `apiFetch` immediately returns a typed `UNAUTHENTICATED` error envelope without making an invalid network round-trip.
+3. **Token Refresh**: On receiving an HTTP 401 from any protected route, `apiFetch` attempts a single retry by requesting a forced token refresh (`getIdToken(true)`).
+
+### Server-Side Route Guard (`withAuth`)
+- Implemented in `src/server/with-auth.ts` wrapping route handlers with `withAuth(handler, { minRole })`.
+- Guard validates `x-org-id` header format (alphanumeric, max 64 chars) using Zod.
+- Verifies ID token with `verifyIdToken(token, true)` enforcing revocation checks (`checkRevoked: true`).
+- Authorises organisation membership via `requireOrgMember` looking up `orgs/{orgId}/members/{uid}` with role hierarchy: `viewer` < `analyst` < `admin`.
+
+> [!IMPORTANT]
+> **Admin SDK Security Boundary**: The Firebase Admin SDK bypasses Firestore Security Rules completely. Route-level checks (`requireOrgMember` inside `withAuth`) constitute the true, authoritative authorization boundary for all engine APIs.
+
+### Testability & Isolation
+- Server auth components (`src/server/auth.ts`) declare interfaces: `TokenVerifier` and `MembershipStore`.
+- Default implementations utilize `firebase-admin/auth` and `firebase-admin/firestore`.
+- Test suites inject mock verifiers (`setTokenVerifier`) and stores (`setMembershipStore`) to run fast, deterministic Vitest checks without needing live Firebase infrastructure.
+- Server-only modules use `import "server-only"` to prevent leakage into client bundles.
+
+### Fail-Closed Mock Mode in Production
+- Mock authentication is strictly disabled in production (`NODE_ENV === "production"`) unless `NEXT_PUBLIC_ALLOW_MOCK_AUTH=true` is set explicitly.
+- In production without configured Firebase credentials, the login page displays a dedicated "Authentication is not configured" error panel, completely suppressing mock login and demo persona buttons.
 
 ## Data flow
 ```mermaid
 flowchart LR
-  U[Browser UI] -->|ID token + JSON| R[Route Handler]
-  R -->|verify| A[Firebase Auth]
-  R -->|Zod parse| E[Engine]
-  E --> R
-  R -->|Admin SDK| F[(Firestore)]
-  R --> U
+  U[Browser UI / apiFetch] -->|Bearer ID token + x-org-id| W[withAuth Wrapper]
+  W -->|verifyIdToken checkRevoked| A[Firebase Admin Auth]
+  W -->|getRole orgs/orgId/members/uid| M[MembershipStore / Firestore]
+  W -->|Zod parse body| E[Engine]
+  E --> W
+  W -->|Typed envelope| U
 ```
 
 ```mermaid
@@ -40,10 +72,14 @@ flowchart TD
 ```
 
 ## Errors
-Engine throws typed errors; routes map them to `{ok:false}` with stable codes and never leak stack traces or secrets. UI has loading, empty and error states.
+All route failures return the typed envelope `{ ok: false, error: { code, message, details? } }`:
+- `400`: `VALIDATION_ERROR` (Zod validation failure on body or `x-org-id` header)
+- `401`: `UNAUTHENTICATED` (missing, malformed, expired, or revoked token)
+- `403`: `FORBIDDEN` (user is not an active member of the requested org or has insufficient role)
+- `500`: `INTERNAL` (generic message: "An unexpected internal server error occurred."; internal stack traces and secrets are never exposed to clients, logged server-side only)
 
 ## Deployment
-Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars. Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
+Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
-## Phase-1 reality
-Only the UI shell with labelled sample data exists. Firebase, API and engine are not yet implemented.
+## Current Implementation Status
+Phases 1 through 14 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision), Route Handlers (`/api/engine/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, and client API fetch plumbing.
