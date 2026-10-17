@@ -230,20 +230,46 @@ export function LoginForm() {
           {activeError && (
             <div
               role="alert"
-              className="mb-4 flex items-start gap-2 rounded-md border border-negative/40 bg-negative/10 p-3 text-xs text-negative"
+              className="mb-4 rounded-md border border-negative/40 bg-negative/10 p-3 text-xs text-negative"
             >
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div className="flex-1">{activeError}</div>
-              <button
-                type="button"
-                onClick={() => {
-                  setLocalError(null);
-                  clearError();
-                }}
-                className="text-negative hover:underline"
-              >
-                ×
-              </button>
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div className="flex-1 font-medium">{activeError}</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLocalError(null);
+                    clearError();
+                  }}
+                  className="text-negative hover:underline font-bold text-sm leading-none"
+                  aria-label="Dismiss error"
+                >
+                  ×
+                </button>
+              </div>
+
+              {typeof window !== "undefined" &&
+                (activeError.includes("unauthorized-domain") ||
+                  activeError.includes("Authorized domains") ||
+                  activeError.includes("Domain unauthorized")) && (
+                  <div className="mt-3 rounded border border-border/80 bg-surface-2 p-2.5 text-[11px] text-foreground">
+                    <p className="font-semibold text-warning">Quick Fix for Vercel:</p>
+                    <ol className="mt-1.5 list-decimal list-inside space-y-1 text-muted leading-relaxed">
+                      <li>
+                        Open <strong>Firebase Console</strong> → <strong>Authentication</strong> → <strong>Settings</strong> tab
+                      </li>
+                      <li>
+                        Click <strong>Authorized domains</strong> → <strong>Add domain</strong>
+                      </li>
+                      <li>
+                        Add this domain:{" "}
+                        <code className="rounded bg-surface-1 px-1.5 py-0.5 font-mono font-bold text-primary">
+                          {window.location.hostname}
+                        </code>
+                      </li>
+                    </ol>
+                  </div>
+                )}
             </div>
           )}
 

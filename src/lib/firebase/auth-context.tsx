@@ -71,11 +71,25 @@ function translateAuthError(error: unknown): string {
         return "Network connection error. Please check your internet connection.";
       case "auth/too-many-requests":
         return "Access temporarily blocked due to multiple failed attempts. Please try again later.";
+      case "auth/unauthorized-domain":
+        return "This domain is not authorized for Google Sign-In in Firebase. Add your Vercel domain to Firebase Console > Authentication > Settings > Authorized domains.";
+      case "auth/popup-blocked":
+        return "Google sign-in popup was blocked by your browser. Please allow popups for this site.";
+      case "auth/operation-not-allowed":
+        return "Google sign-in is not enabled in Firebase Console. Please enable Google provider in Authentication > Sign-in method.";
+      case "auth/cancelled-popup-request":
+        return "Google sign-in was cancelled due to another popup opening.";
       default:
         break;
     }
   }
   if (error instanceof Error) {
+    if (error.message.includes("auth/unauthorized-domain")) {
+      return "This domain is not authorized for Google Sign-In in Firebase. Add your Vercel domain to Firebase Console > Authentication > Settings > Authorized domains.";
+    }
+    if (error.message.includes("auth/popup-blocked")) {
+      return "Google sign-in popup was blocked by your browser. Please allow popups for this site.";
+    }
     return error.message;
   }
   return "An unexpected authentication error occurred. Please try again.";
