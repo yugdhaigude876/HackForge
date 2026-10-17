@@ -164,8 +164,8 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
 ### Endpoints
 1. **`POST /api/simulations`**:
    - Minimum role: `analyst` (viewers receive 403 Forbidden).
-   - Rate limit: 10-second per-org debouncing limiter returning 429 with `Retry-After`.
-   - Requires existing instruments and series history; returns 400 `VALIDATION_ERROR` with clear error descriptions if missing.
+   - Rate limit: 10-second per-org debouncing limiter returning 429 with `Retry-After`. Note: Limiter is in-memory per serverless instance (best effort, not a distributed hard guarantee).
+   - Requires existing instruments and baseline decision; returns 400 `VALIDATION_ERROR` unless `source: "synthetic"` with explicit `startingCash`.
    - Runs simulation, persists record to `orgs/{orgId}/simulations`, appends SHA-256 audit entry, and returns result envelope.
    - Persistence failure returns `persisted: false` with a generic warning, logging details server-side only.
 2. **`GET /api/simulations`**:
@@ -181,9 +181,38 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
 - Inline KPI readout grid (shortfall frequency, expected shortfall, emergency borrowing cost, penalties paid, net yield) and median cash path with p5–p95 confidence band rendered via Recharts with CSS variable theme support.
 - When unauthenticated or in mock mode, controls are disabled and a clear "Demonstration Mode" message directs users to sign in with a real account.
 
+## Digital Twin & Policy Comparison (Phase 19)
+
+### Multi-Policy Simulation Engine (`compareScenarioAcrossPolicies`)
+- **Common Random Numbers (CRN)**: Evaluates multiple policies (`reserve-juggler`, `hold-all-cash`, `fixed-buffer`) over identical bootstrapped residual shocks, isolating differences strictly to policy decisions rather than Monte Carlo sampling variance.
+- **Deltas vs Baselines**: Computes pairwise metric differentials ($\Delta$) against `hold-all-cash` and `fixed-buffer`.
+- **Descriptive Winners**: Surfaces winning policies per metric (e.g. highest net yield, lowest shortfall frequency) purely as descriptive facts without unmeasured marketing claims.
+
+### Endpoints
+1. **`POST /api/simulations/compare`**:
+   - Minimum role: `analyst`.
+   - Work cap: `trials × policies ≤ 3,000` to guarantee execution finishes well within serverless timeouts.
+   - Rate limit: Shared 10-second in-memory limiter per org.
+   - Persistence: Persists one `simulations` record per policy sharing a unique `comparisonId`, plus one SHA-256 audit entry.
+2. **`GET /api/simulations/compare`**:
+   - Minimum role: `viewer`.
+   - Lists recent comparisons grouped by `comparisonId`.
+3. **`GET /api/simulations/compare/[comparisonId]`**:
+   - Minimum role: `viewer`.
+   - Retrieves stored multi-policy runs for deterministic replay without re-simulation.
+4. **`GET /api/instruments`**:
+   - Minimum role: `viewer`.
+   - Returns active org instruments for scenario builder outage selection.
+
+### Digital Twin UI (`/twin`)
+- **Scenario Builder**: Interactive stress shock presets ("Deposit outflow shock", "Settlement delay", "Bank-run tail", "Rate drop", "Instrument outage"), sliders, copyable seed.
+- **Side-by-Side Comparison**: Multi-policy overlaid chart with p5-p95 uncertainty intervals and comparison table with deltas and descriptive badges.
+- **Interactive Replay Scrubber**: Play/pause timer (800ms per step), step backward/forward buttons, slider, and keyboard controls (`ArrowLeft`, `ArrowRight`, `Space`) with real-time policy cash readouts and shock status badge.
+- **Archived History**: Lists recent runs with 1-click deterministic replay from stored Firestore records.
+
 ## Deployment
 Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
 ## Current Implementation Status
-Phases 1 through 18 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision, simulate), Route Handlers (`/api/engine/*`, `/api/simulations/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), full dashboard wiring (`/api/dashboard/summary`, `/api/dashboard/run`, `useDashboardData`), and the stress scenario simulator with interactive dashboard panel. Tested with 292 Vitest unit/integration tests and visual browser subagent verification across desktop and mobile form factors.
+Phases 1 through 19 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision, simulate, multi-policy comparison), Route Handlers (`/api/engine/*`, `/api/simulations/*`, `/api/simulations/compare/*`, `/api/instruments`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), full dashboard wiring, stress scenario simulator, and the Digital Twin page (`/twin`) with scenario builder presets, side-by-side policy comparison, and keyboard-accessible replay scrubber. Verified with 317 Vitest tests, lint, tsc, and production build.
 

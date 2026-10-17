@@ -93,6 +93,29 @@ When cash goes negative ($C_t < 0$):
   $$\text{netYield} = \text{grossYield} - \text{penaltiesPaid} - \text{emergencyBorrowingCost} \quad (\text{exact equality})$$
 - All money values use `Money` (BigInt integer minor units, e.g. cents). Rates are converted with explicit round-half-even (banker's rounding) rules. No floating-point balances are used.
 
-### 5. Honest Framing & Disclaimer
+### 5. Common Random Numbers (CRN) Method
+To evaluate multiple policies (`reserve-juggler`, `hold-all-cash`, `fixed-buffer`) without Monte Carlo sampling bias, the engine uses **Common Random Numbers (CRN)**:
+- A single master PRNG seed generates a 2D bootstrap residual noise matrix $E \in \mathbb{R}^{\text{trials} \times \text{horizonHours}}$ upfront.
+- Every policy is evaluated against the exact same drawn noise matrix $E$.
+- Consequently, performance differentials ($\Delta_{\text{netYield}}$, $\Delta_{\text{shortfall}}$) represent deterministic consequences of the policy's liquidity constraints and allocation decisions, eliminating sampling noise.
+
+### 6. Safe Integer Bounds & Numerical Safeguards
+- All balance and minor arithmetic operates on `bigint`. When converting to `Number` for fractional hourly rate multiplication, values are guarded by `safeBigIntToNumber`.
+- If any balance exceeds `Number.MAX_SAFE_INTEGER` ($2^{53}-1 \approx 9.007 \times 10^{15}$ cents, or approximately $90 trillion USD), the engine throws an explicit `RangeError("Amount exceeds Number.MAX_SAFE_INTEGER")` rather than failing silently with floating-point truncation.
+
+### 7. Unit Conventions & Boundary Conversion
+- Instrument rates and penalties cross the API boundary strictly as basis points (`annualRateBps`, `penaltyBps`) in integer format.
+- At the engine boundary, these are converted to decimal fractions:
+  $$\text{annualRate} = \frac{\text{annualRateBps}}{10\,000}, \quad \text{penalty} = \frac{\text{penaltyBps}}{10\,000}$$
+- No heuristics or guesses (e.g. `rate > 1`) are used in the engine. Tests verify both high-yield (e.g. 4.10% = 410 bps) and ultra-low yield (e.g. 0.05% = 5 bps) instruments.
+
+### 8. Liquid Cash Metrics: Mean Idle Cash vs Cash-Hours
+- **`meanIdleCash`**: Represents the average liquid cash balance maintained over the simulation horizon:
+  $$\text{meanIdleCash} = \frac{1}{H} \sum_{t=1}^H C_t$$
+- **`idleCashHours`**: Measures the true time-integrated cash commitment (cash-hours):
+  $$\text{idleCashHours} = \sum_{t=1}^H C_t \cdot \Delta t \quad (\Delta t = 1 \text{ hour})$$
+- Serialized results store both `meanIdleCashMinor` and `idleCashHoursMinor`. Legacy records without `meanIdleCashMinor` fall back gracefully to `idleCashHoursMinor` for backward compatibility.
+
+### 9. Honest Framing & Disclaimer
 All simulation metrics are model outputs on empirical or synthetic inputs, not a financial guarantee. Every simulation result includes a mandatory disclaimer emphasizing that reserve juggler outputs reflect probabilistic estimates under modeled assumptions.
 

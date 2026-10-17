@@ -49,6 +49,7 @@ export interface SimulationResultDTO {
     p50Minor: string;
     p95Minor: string;
   };
+  meanIdleCashMinor?: string;
   idleCashHoursMinor: string;
   cashPath: Array<{
     hour: number;

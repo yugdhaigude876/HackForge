@@ -29,6 +29,20 @@
       ]
     },
     {
+      "collectionGroup": "simulations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "comparisonId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "decisions",
       "queryScope": "COLLECTION",
       "fields": [

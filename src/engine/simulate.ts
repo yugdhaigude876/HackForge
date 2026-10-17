@@ -26,10 +26,27 @@ import {
 } from "@/engine/schemas";
 
 // ---------------------------------------------------------------------------
-// Type Definitions
+// Type Definitions & Safe Arithmetic Guards
 // ---------------------------------------------------------------------------
 
 export type { Scenario, ScenarioInput, PolicyType };
+
+const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER); // 9_007_199_254_740_991n
+const MIN_SAFE_INTEGER_BIGINT = BigInt(Number.MIN_SAFE_INTEGER); // -9_007_199_254_740_991n
+
+/**
+ * Converts a BigInt minor unit value to a JavaScript double-precision number,
+ * throwing a RangeError loudly if the value exceeds Number.MAX_SAFE_INTEGER.
+ * Protects against silent IEEE 754 precision loss when balances approach $90 Trillion USD.
+ */
+export function safeBigIntToNumber(val: bigint, context = "value"): number {
+  if (val > MAX_SAFE_INTEGER_BIGINT || val < MIN_SAFE_INTEGER_BIGINT) {
+    throw new RangeError(
+      `Numeric overflow: ${context} (${val.toString()}) exceeds Number.MAX_SAFE_INTEGER (2^53 - 1). Cannot safely convert to floating point.`
+    );
+  }
+  return Number(val);
+}
 
 export interface SimulationParams {
   /** PRNG seed string or numeric seed for 100% deterministic reproduction */
@@ -72,6 +89,9 @@ export interface SimulationParams {
 
   /** Merchant settlement fraction of inbound cash (default: 0.35 = 35%) */
   settlementShareOfInflow?: number;
+
+  /** Optional pre-computed common random numbers noise index matrix: [trials][horizonHours] */
+  precomputedNoiseIndices?: readonly (readonly number[])[];
 }
 
 export interface CashPathPoint {
@@ -132,7 +152,10 @@ export interface SimulationResult {
     p95: Money;
   };
 
-  /** Average idle liquid cash * hours over the horizon */
+  /** Mean idle liquid cash balance across the horizon (Money minor units) */
+  meanIdleCash: Money;
+
+  /** Cumulative idle liquid cash-hours: sum of cash over time (Money * hours) */
   idleCashHours: Money;
 
   /** Median cash path and uncertainty bands for charting */
@@ -170,7 +193,8 @@ export function extractHistoricalResiduals(history: readonly HourlyBucket[]): nu
         // Use forecaster's historical hour profile
         const expected = forecaster.predict(history.slice(0, Math.max(168, i)), 1)[0];
         const actual = bucket.netFlow;
-        residuals.push(Number(actual.amountMinor - expected.amountMinor));
+        const diffMinor = actual.amountMinor - expected.amountMinor;
+        residuals.push(safeBigIntToNumber(diffMinor, "residual flow"));
       }
       if (residuals.length > 0) return residuals;
     } catch {
@@ -179,9 +203,9 @@ export function extractHistoricalResiduals(history: readonly HourlyBucket[]): nu
   }
 
   // Fallback: difference from historical sample mean
-  const totalMinor = history.reduce((acc, b) => acc + Number(b.netFlow.amountMinor), 0);
+  const totalMinor = history.reduce((acc, b) => acc + safeBigIntToNumber(b.netFlow.amountMinor, "netFlow"), 0);
   const meanMinor = totalMinor / history.length;
-  return history.map((b) => Number(b.netFlow.amountMinor) - meanMinor);
+  return history.map((b) => safeBigIntToNumber(b.netFlow.amountMinor, "netFlow") - meanMinor);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +218,11 @@ export function extractHistoricalResiduals(history: readonly HourlyBucket[]): nu
  */
 export function runSimulation(params: SimulationParams): SimulationResult {
   const startTime = Date.now();
+  safeBigIntToNumber(params.startingCash.amountMinor, "startingCash");
+  if (params.operationalFloor) {
+    safeBigIntToNumber(params.operationalFloor.amountMinor, "operationalFloor");
+  }
+
   const currency = params.startingCash.currency;
   const scenario = ScenarioSchema.parse(params.scenario);
 
@@ -232,9 +261,10 @@ export function runSimulation(params: SimulationParams): SimulationResult {
   }
 
   // 2. Adjust Instruments for Yield Rate Shock
+  // Instrument.apy is strictly a decimal fraction (e.g. 0.045 for 4.5%, 0.0005 for 0.05%)
   const adjustedInstruments: Instrument[] = params.instruments.map((inst) => {
     const rateShift = (scenario.yieldRateShockBps ?? 0) / 10_000;
-    const baseApy = inst.apy > 1 ? inst.apy / 10_000 : inst.apy;
+    const baseApy = inst.apy;
     const adjustedApy = Math.max(0, baseApy + rateShift);
     return {
       ...inst,
@@ -331,6 +361,7 @@ export function runSimulation(params: SimulationParams): SimulationResult {
   const trialGrossYields: Money[] = [];
   const trialNetYields: Money[] = [];
   const trialMinCash: Money[] = [];
+  const trialMeanIdleCash: Money[] = [];
   const trialIdleCashHours: Money[] = [];
 
   // Track cash paths across all trials for percentiles per hour: hour -> Money[]
@@ -370,8 +401,9 @@ export function runSimulation(params: SimulationParams): SimulationResult {
         if (balance && balance.isPositive()) {
           // Annual rate to hourly rate: rate / 8760
           const hourlyRate = inst.apy / 8760;
+          const balanceNum = safeBigIntToNumber(balance.amountMinor, "instrument balance");
           const yieldMinor = BigInt(
-            Math.round(Number(balance.amountMinor) * hourlyRate)
+            Math.round(balanceNum * hourlyRate)
           );
           if (yieldMinor > 0n) {
             const earned = Money.fromMinor(yieldMinor, currency);
@@ -382,7 +414,9 @@ export function runSimulation(params: SimulationParams): SimulationResult {
 
       // C. Sample net cash flow for hour h with bootstrap noise and shocks
       const basePoint = baselineForecast[h - 1] ?? Money.zero(currency);
-      const resIndex = prng.nextInt(0, residuals.length - 1);
+      const resIndex = params.precomputedNoiseIndices
+        ? params.precomputedNoiseIndices[t][h - 1]
+        : prng.nextInt(0, residuals.length - 1);
       const noiseMinor = BigInt(Math.round(residuals[resIndex]));
 
       // Determine nominal inflow and outflow
@@ -407,7 +441,8 @@ export function runSimulation(params: SimulationParams): SimulationResult {
       let effectiveOutflow = nominalOutflow;
       if (h >= shockStart && h <= shockEnd) {
         const shockFactor = 1 + (scenario.outflowShockPct ?? 0) / 100;
-        effectiveOutflow = BigInt(Math.round(Number(effectiveOutflow) * shockFactor));
+        const outflowNum = safeBigIntToNumber(effectiveOutflow, "effective outflow");
+        effectiveOutflow = BigInt(Math.round(outflowNum * shockFactor));
       }
 
       // Shock 2: Correlated bank-run outflow tail
@@ -415,7 +450,8 @@ export function runSimulation(params: SimulationParams): SimulationResult {
         const tau = h - shockStart;
         const { intensityPct, decay } = scenario.correlatedRun;
         const runFactor = (intensityPct / 100) * Math.pow(decay, tau);
-        const extraOutflow = BigInt(Math.round(Number(nominalOutflow) * runFactor));
+        const nominalOutNum = safeBigIntToNumber(nominalOutflow, "nominal outflow");
+        const extraOutflow = BigInt(Math.round(nominalOutNum * runFactor));
         effectiveOutflow += extraOutflow;
       }
 
@@ -423,7 +459,8 @@ export function runSimulation(params: SimulationParams): SimulationResult {
       let effectiveInflow = nominalInflow;
       const delay = scenario.settlementDelayHours ?? 0;
       if (delay > 0) {
-        const settlementPortion = BigInt(Math.round(Number(nominalInflow) * settlementShare));
+        const nominalInNum = safeBigIntToNumber(nominalInflow, "nominal inflow");
+        const settlementPortion = BigInt(Math.round(nominalInNum * settlementShare));
         effectiveInflow = nominalInflow - settlementPortion;
         // Schedule settlement arrival at hour h + delay
         const arrivalHour = h + delay;
@@ -480,8 +517,9 @@ export function runSimulation(params: SimulationParams): SimulationResult {
           // Emergency borrowing at configurable rate to bridge the gap
           // Per-hour rate: emergencyBorrowingRateBps / 10000 / 8760
           const hourlyBorrowingRate = emergencyBorrowingRateBps / 10_000 / 8760;
+          const shortfallNum = safeBigIntToNumber(shortfallAmount.amountMinor, "shortfall amount");
           const borrowingFeeMinor = BigInt(
-            Math.ceil(Number(shortfallAmount.amountMinor) * hourlyBorrowingRate)
+            Math.ceil(shortfallNum * hourlyBorrowingRate)
           );
           if (borrowingFeeMinor > 0n) {
             trialBorrowingCost = trialBorrowingCost.add(Money.fromMinor(borrowingFeeMinor, currency));
@@ -510,7 +548,8 @@ export function runSimulation(params: SimulationParams): SimulationResult {
     trialGrossYields.push(trialGrossYield);
     trialNetYields.push(trialNetYield);
     trialMinCash.push(trialMin);
-    trialIdleCashHours.push(Money.fromMinor(trialCashSum / BigInt(horizonHours), currency));
+    trialMeanIdleCash.push(Money.fromMinor(trialCashSum / BigInt(horizonHours), currency));
+    trialIdleCashHours.push(Money.fromMinor(trialCashSum, currency));
   }
 
   // 5. Aggregate Across All Trials
@@ -548,7 +587,12 @@ export function runSimulation(params: SimulationParams): SimulationResult {
   const p50MinCash = sortedMinCash[Math.floor(0.50 * (trials - 1))] ?? Money.zero(currency);
   const p95MinCash = sortedMinCash[Math.floor(0.95 * (trials - 1))] ?? Money.zero(currency);
 
-  const meanIdleCashHours = Money.fromMinor(
+  const meanIdleCash = Money.fromMinor(
+    trialMeanIdleCash.reduce((acc, i) => acc + i.amountMinor, 0n) / BigInt(trials),
+    currency
+  );
+
+  const idleCashHours = Money.fromMinor(
     trialIdleCashHours.reduce((acc, i) => acc + i.amountMinor, 0n) / BigInt(trials),
     currency
   );
@@ -588,8 +632,239 @@ export function runSimulation(params: SimulationParams): SimulationResult {
       p50: p50MinCash,
       p95: p95MinCash,
     },
-    idleCashHours: meanIdleCashHours,
+    meanIdleCash,
+    idleCashHours,
     cashPath,
+    executionDurationMs: durationMs,
+    disclaimer: SIMULATION_DISCLAIMER,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-Policy Comparison Engine (Common Random Numbers)
+// ---------------------------------------------------------------------------
+
+export interface MetricDeltas {
+  /** Net yield delta = policy netYield minus baseline netYield */
+  netYield: Money;
+
+  /** Shortfall frequency delta = policy shortfallFrequency minus baseline shortfallFrequency */
+  shortfallFrequency: number;
+
+  /** Expected shortfall delta = policy expectedShortfall minus baseline expectedShortfall */
+  expectedShortfall: Money;
+
+  /** 95th percentile shortfall delta = policy p95Shortfall minus baseline p95Shortfall */
+  p95Shortfall: Money;
+
+  /** Liquidation penalties delta = policy penaltiesPaid minus baseline penaltiesPaid */
+  penaltiesPaid: Money;
+
+  /** Emergency borrowing cost delta = policy emergencyBorrowingCost minus baseline emergencyBorrowingCost */
+  emergencyBorrowingCost: Money;
+}
+
+export interface PolicyComparisonDeltas {
+  /** Differences versus the hold-all-cash baseline (if hold-all-cash is included) */
+  vsHoldAllCash?: MetricDeltas;
+
+  /** Differences versus the fixed-buffer baseline (if fixed-buffer is included) */
+  vsFixedBuffer?: MetricDeltas;
+}
+
+export interface MetricWinners {
+  netYield: PolicyType;
+  shortfallFrequency: PolicyType;
+  expectedShortfall: PolicyType;
+  p95Shortfall: PolicyType;
+  penaltiesPaid: PolicyType;
+  emergencyBorrowingCost: PolicyType;
+}
+
+export interface PolicyComparisonParams {
+  /** PRNG seed string or numeric seed for 100% deterministic reproduction across all policies */
+  seed?: string | number;
+
+  /** Historical hourly series available strictly before the simulated window */
+  history: readonly HourlyBucket[];
+
+  /** Starting unencumbered cash balance at t=0 */
+  startingCash: Money;
+
+  /** Configured yield instruments eligible for investment */
+  instruments: readonly Instrument[];
+
+  /** Existing active holdings at t=0 (if any) */
+  holdings?: readonly AllocatedHolding[];
+
+  /** Stress scenario parameters */
+  scenario: ScenarioInput;
+
+  /** Policies to compare side-by-side (1 to 3 distinct policies) */
+  policies?: readonly PolicyType[];
+
+  /** Optional policy-specific parameters (e.g. bufferPct for fixed-buffer) */
+  policyParams?: {
+    bufferPct?: number;
+  };
+
+  /** Simulation horizon in hours (1..168, default: 24) */
+  horizonHours?: number;
+
+  /** Number of Monte Carlo trials per policy (1..1000, default: 500) */
+  trials?: number;
+
+  /** Operational floor buffer F for reserve policies */
+  operationalFloor?: Money;
+
+  /** Emergency borrowing rate in basis points annualized (default: 1000 = 10%) */
+  emergencyBorrowingRateBps?: number;
+
+  /** Merchant settlement fraction of inbound cash (default: 0.35 = 35%) */
+  settlementShareOfInflow?: number;
+}
+
+export interface PolicyComparisonResult {
+  seed: string;
+  trials: number;
+  horizonHours: number;
+  scenario: Scenario;
+  policies: PolicyType[];
+  /** Per-policy simulation results */
+  policyResults: Record<PolicyType, SimulationResult>;
+  /** Per-policy deltas vs baselines */
+  deltas: Record<PolicyType, PolicyComparisonDeltas>;
+  /** Descriptive winner per metric (best-performing policy among evaluated) */
+  winners: MetricWinners;
+  executionDurationMs: number;
+  disclaimer: string;
+}
+
+/**
+ * Executes a side-by-side policy comparison under Common Random Numbers (CRN).
+ *
+ * All policies are evaluated using the EXACT same pseudo-random sequence of
+ * bootstrap residual draws and shocks for every trial and hour. This eliminates
+ * Monte Carlo noise from the policy comparison: observed deltas between policies
+ * stem solely from the policy mechanism (reserve sizing, deployment, liquidation),
+ * not from differing random shock draws.
+ */
+export function compareScenarioAcrossPolicies(
+  params: PolicyComparisonParams
+): PolicyComparisonResult {
+  const startTime = Date.now();
+  const seedString = params.seed !== undefined ? String(params.seed) : "compare-seed-default";
+  const trials = Math.min(1000, Math.max(1, params.trials ?? 500));
+  const horizonHours = Math.min(168, Math.max(1, params.horizonHours ?? 24));
+  const scenario = ScenarioSchema.parse(params.scenario);
+
+  const rawPolicies = params.policies && params.policies.length > 0
+    ? params.policies
+    : (["reserve-juggler", "hold-all-cash", "fixed-buffer"] as PolicyType[]);
+  const policies: PolicyType[] = Array.from(new Set(rawPolicies));
+
+  // 1. Common Random Numbers: Pre-draw bootstrap residual indices using the shared PRNG seed
+  const prng = new SeededPRNG(seedString);
+  const residuals = extractHistoricalResiduals(params.history);
+
+  const precomputedNoiseIndices: number[][] = [];
+  for (let t = 0; t < trials; t++) {
+    const trialNoise: number[] = [];
+    for (let h = 0; h < horizonHours; h++) {
+      trialNoise.push(prng.nextInt(0, residuals.length - 1));
+    }
+    precomputedNoiseIndices.push(trialNoise);
+  }
+
+  // 2. Execute each policy under the exact same common random number draws
+  const policyResults = {} as Record<PolicyType, SimulationResult>;
+  for (const policy of policies) {
+    policyResults[policy] = runSimulation({
+      ...params,
+      policy,
+      seed: seedString,
+      trials,
+      horizonHours,
+      precomputedNoiseIndices,
+    });
+  }
+
+  // 3. Compute deltas versus baselines
+  const holdAllCashRes = policyResults["hold-all-cash"];
+  const fixedBufferRes = policyResults["fixed-buffer"];
+
+  function computeDeltas(target: SimulationResult, baseline: SimulationResult): MetricDeltas {
+    return {
+      netYield: target.netYield.subtract(baseline.netYield),
+      shortfallFrequency: target.shortfallFrequency - baseline.shortfallFrequency,
+      expectedShortfall: target.expectedShortfall.subtract(baseline.expectedShortfall),
+      p95Shortfall: target.p95Shortfall.subtract(baseline.p95Shortfall),
+      penaltiesPaid: target.penaltiesPaid.subtract(baseline.penaltiesPaid),
+      emergencyBorrowingCost: target.emergencyBorrowingCost.subtract(baseline.emergencyBorrowingCost),
+    };
+  }
+
+  const deltas = {} as Record<PolicyType, PolicyComparisonDeltas>;
+  for (const policy of policies) {
+    const target = policyResults[policy];
+    deltas[policy] = {
+      ...(holdAllCashRes ? { vsHoldAllCash: computeDeltas(target, holdAllCashRes) } : {}),
+      ...(fixedBufferRes ? { vsFixedBuffer: computeDeltas(target, fixedBufferRes) } : {}),
+    };
+  }
+
+  // 4. Compute descriptive winners per metric
+  // netYield: higher is better
+  // shortfallFrequency, expectedShortfall, p95Shortfall, penaltiesPaid, emergencyBorrowingCost: lower is better
+  let bestNetYield = policies[0];
+  let bestShortfallFreq = policies[0];
+  let bestExpShortfall = policies[0];
+  let bestP95Shortfall = policies[0];
+  let bestPenalties = policies[0];
+  let bestBorrowing = policies[0];
+
+  for (const p of policies) {
+    const res = policyResults[p];
+    if (res.netYield.amountMinor > policyResults[bestNetYield].netYield.amountMinor) {
+      bestNetYield = p;
+    }
+    if (res.shortfallFrequency < policyResults[bestShortfallFreq].shortfallFrequency) {
+      bestShortfallFreq = p;
+    }
+    if (res.expectedShortfall.amountMinor < policyResults[bestExpShortfall].expectedShortfall.amountMinor) {
+      bestExpShortfall = p;
+    }
+    if (res.p95Shortfall.amountMinor < policyResults[bestP95Shortfall].p95Shortfall.amountMinor) {
+      bestP95Shortfall = p;
+    }
+    if (res.penaltiesPaid.amountMinor < policyResults[bestPenalties].penaltiesPaid.amountMinor) {
+      bestPenalties = p;
+    }
+    if (res.emergencyBorrowingCost.amountMinor < policyResults[bestBorrowing].emergencyBorrowingCost.amountMinor) {
+      bestBorrowing = p;
+    }
+  }
+
+  const winners: MetricWinners = {
+    netYield: bestNetYield,
+    shortfallFrequency: bestShortfallFreq,
+    expectedShortfall: bestExpShortfall,
+    p95Shortfall: bestP95Shortfall,
+    penaltiesPaid: bestPenalties,
+    emergencyBorrowingCost: bestBorrowing,
+  };
+
+  const durationMs = Date.now() - startTime;
+
+  return {
+    seed: seedString,
+    trials,
+    horizonHours,
+    scenario,
+    policies,
+    policyResults,
+    deltas,
+    winners,
     executionDurationMs: durationMs,
     disclaimer: SIMULATION_DISCLAIMER,
   };

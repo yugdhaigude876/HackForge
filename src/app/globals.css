@@ -15,6 +15,9 @@
   --positive: #34d399;
   --warning: #fbbf24;
   --negative: #f87171;
+  --policy-juggler: #38bdf8;
+  --policy-cash: #fbbf24;
+  --policy-buffer: #c084fc;
   color-scheme: dark;
 }
 
@@ -30,6 +33,9 @@
   --positive: #1d8a5e;
   --warning: #a96f12;
   --negative: #b83f36;
+  --policy-juggler: #0284c7;
+  --policy-cash: #d97706;
+  --policy-buffer: #9333ea;
   color-scheme: light;
 }
 

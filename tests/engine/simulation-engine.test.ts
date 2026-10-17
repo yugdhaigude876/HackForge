@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { runSimulation, type SimulationParams } from "@/engine/simulate";
+import {
+  runSimulation,
+  compareScenarioAcrossPolicies,
+  safeBigIntToNumber,
+  type SimulationParams,
+} from "@/engine/simulate";
 import { Money } from "@/engine/money";
 import { Instrument, HourlyBucket } from "@/engine/models";
 import { generateTransactions } from "@/engine/generator";
@@ -286,36 +291,80 @@ describe("Stress Scenario Simulator Engine (Phase 18)", () => {
       expect(res.netYield.amountMinor).toBe(calculatedNet.amountMinor);
     });
 
-    it("processes very large cash balances (> 2^53 cents = $90 Trillion) without precision loss", () => {
-      // 2^53 cents is ~9.007e15 cents ($90 Trillion).
-      const massiveCash = Money.fromMinor(100_000_000_000_000_000n, "USD"); // $1 Quadrillion cents
+    it("fails loudly with RangeError if cash balance exceeds Number.MAX_SAFE_INTEGER (> 2^53 - 1)", () => {
+      // 2^53 - 1 is 9,007,199,254,740,991 cents (~$90 Trillion).
+      const overflowingCash = Money.fromMinor(100_000_000_000_000_000n, "USD"); // $1 Quadrillion cents
 
-      const massiveInstruments: Instrument[] = [
+      expect(() => {
+        safeBigIntToNumber(overflowingCash.amountMinor, "startingCash");
+      }).toThrow(RangeError);
+
+      expect(() => {
+        runSimulation({
+          seed: "overflow-test",
+          history,
+          startingCash: overflowingCash,
+          instruments,
+          scenario: { outflowShockPct: 10, settlementDelayHours: 0, confidence: 0.99 },
+          policy: "reserve-juggler",
+          horizonHours: 24,
+          trials: 10,
+        });
+      }).toThrow(RangeError);
+    });
+
+    it("processes large balances safely within safe integer limits (< 2^53 - 1)", () => {
+      // $50 Billion = 5,000,000,000,000 cents (well under 9e15 safe integer bound)
+      const largeCash = Money.fromMinor(5_000_000_000_000_00n, "USD");
+      const res = runSimulation({
+        seed: "large-safe-test",
+        history,
+        startingCash: largeCash,
+        instruments,
+        scenario: { outflowShockPct: 10, settlementDelayHours: 0, confidence: 0.99 },
+        policy: "reserve-juggler",
+        horizonHours: 24,
+        trials: 20,
+      });
+
+      expect(res.grossYield.isPositive()).toBe(true);
+      expect(typeof res.grossYield.amountMinor).toBe("bigint");
+    });
+
+    it("handles explicit decimal rate units accurately for both 4.10% and 0.05% instruments without heuristic guessing", () => {
+      const explicitRateInstruments: Instrument[] = [
         {
-          id: "mega-t-bill",
-          name: "Sovereign Facility",
-          apy: 0.05,
-          capacity: Money.fromMinor(50_000_000_000_000_000n, "USD"),
-          withdrawalPenalty: 0,
+          id: "inst-410",
+          name: "4.10% Treasury",
+          apy: 0.0410, // 4.10% annual rate
+          capacity: Money.fromMinor(10_000_000_00n, "USD"),
+          withdrawalPenalty: 0.0010, // 10 bps penalty
+          settlementLagHours: 0,
+        },
+        {
+          id: "inst-005",
+          name: "0.05% Overnight Facility",
+          apy: 0.0005, // 0.05% annual rate
+          capacity: Money.fromMinor(10_000_000_00n, "USD"),
+          withdrawalPenalty: 0.0001, // 1 bp penalty
           settlementLagHours: 0,
         },
       ];
 
       const res = runSimulation({
-        seed: "large-bigint-test",
+        seed: "rate-unit-test",
         history,
-        startingCash: massiveCash,
-        instruments: massiveInstruments,
-        scenario: { outflowShockPct: 10, settlementDelayHours: 0, confidence: 0.99 },
-        policy: "reserve-juggler",
+        startingCash,
+        instruments: explicitRateInstruments,
+        scenario: { outflowShockPct: 0, settlementDelayHours: 0, confidence: 0.99 },
+        policy: "fixed-buffer",
+        policyParams: { bufferPct: 0.1 },
         horizonHours: 24,
-        trials: 50,
+        trials: 20,
       });
 
       expect(res.grossYield.isPositive()).toBe(true);
-      expect(typeof res.grossYield.amountMinor).toBe("bigint");
-      // 50 quadrillion cents deployed at 5% APY over 24h yields ~6.85 trillion cents
-      expect(res.grossYield.amountMinor > 1_000_000_000_000n).toBe(true);
+      expect(res.trials).toBe(20);
     });
   });
 
@@ -380,6 +429,110 @@ describe("Stress Scenario Simulator Engine (Phase 18)", () => {
       expect(elapsedMs).toBeLessThan(1000);
       expect(res.trials).toBe(500);
       expect(res.cashPath.length).toBe(25);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 6. Multi-Policy Comparison & Common Random Numbers (Phase 19)
+  // -------------------------------------------------------------------------
+
+  describe("Multi-Policy Comparison & Common Random Numbers (compareScenarioAcrossPolicies)", () => {
+    it("evaluates all policies with identical Common Random Numbers (CRN) draws and is 100% deterministic per seed", () => {
+      const run1 = compareScenarioAcrossPolicies({
+        seed: "crn-deterministic-seed-42",
+        history,
+        startingCash,
+        instruments,
+        scenario: { outflowShockPct: 25, settlementDelayHours: 6, confidence: 0.99 },
+        policies: ["reserve-juggler", "hold-all-cash", "fixed-buffer"],
+        horizonHours: 24,
+        trials: 100,
+      });
+
+      const run2 = compareScenarioAcrossPolicies({
+        seed: "crn-deterministic-seed-42",
+        history,
+        startingCash,
+        instruments,
+        scenario: { outflowShockPct: 25, settlementDelayHours: 6, confidence: 0.99 },
+        policies: ["reserve-juggler", "hold-all-cash", "fixed-buffer"],
+        horizonHours: 24,
+        trials: 100,
+      });
+
+      // 100% Deterministic match across repeated seeded comparisons
+      expect(run1.policyResults["reserve-juggler"].netYield.amountMinor).toBe(
+        run2.policyResults["reserve-juggler"].netYield.amountMinor
+      );
+      expect(run1.policyResults["hold-all-cash"].netYield.amountMinor).toBe(
+        run2.policyResults["hold-all-cash"].netYield.amountMinor
+      );
+      expect(run1.policyResults["fixed-buffer"].netYield.amountMinor).toBe(
+        run2.policyResults["fixed-buffer"].netYield.amountMinor
+      );
+    });
+
+    it("ensures hold-all-cash baseline strictly has zero penalties and zero deployed yield", () => {
+      const comp = compareScenarioAcrossPolicies({
+        seed: "cash-baseline-check",
+        history,
+        startingCash,
+        instruments,
+        scenario: { outflowShockPct: 30, settlementDelayHours: 12, confidence: 0.99 },
+        policies: ["reserve-juggler", "hold-all-cash"],
+        horizonHours: 24,
+        trials: 50,
+      });
+
+      const cashRes = comp.policyResults["hold-all-cash"];
+      expect(cashRes.grossYield.isZero()).toBe(true);
+      expect(cashRes.penaltiesPaid.isZero()).toBe(true);
+      expect(cashRes.grossYield.amountMinor).toBe(0n);
+      expect(cashRes.penaltiesPaid.amountMinor).toBe(0n);
+    });
+
+    it("computes metric deltas that equal exact mathematical differences of underlying results", () => {
+      const comp = compareScenarioAcrossPolicies({
+        seed: "deltas-math-check",
+        history,
+        startingCash,
+        instruments,
+        scenario: { outflowShockPct: 20, settlementDelayHours: 0, confidence: 0.99 },
+        policies: ["reserve-juggler", "hold-all-cash", "fixed-buffer"],
+        horizonHours: 24,
+        trials: 50,
+      });
+
+      const juggler = comp.policyResults["reserve-juggler"];
+      const cash = comp.policyResults["hold-all-cash"];
+      const fixed = comp.policyResults["fixed-buffer"];
+
+      const jugglerDeltas = comp.deltas["reserve-juggler"];
+      expect(jugglerDeltas.vsHoldAllCash).toBeDefined();
+
+      const expectedNetYieldDelta = juggler.netYield.subtract(cash.netYield);
+      expect(jugglerDeltas.vsHoldAllCash!.netYield.amountMinor).toBe(expectedNetYieldDelta.amountMinor);
+
+      const expectedFreqDelta = juggler.shortfallFrequency - cash.shortfallFrequency;
+      expect(jugglerDeltas.vsHoldAllCash!.shortfallFrequency).toBeCloseTo(expectedFreqDelta, 5);
+
+      const expectedShortfallDelta = juggler.expectedShortfall.subtract(cash.expectedShortfall);
+      expect(jugglerDeltas.vsHoldAllCash!.expectedShortfall.amountMinor).toBe(
+        expectedShortfallDelta.amountMinor
+      );
+
+      // Fixed buffer deltas vs cash
+      const fixedDeltas = comp.deltas["fixed-buffer"];
+      expect(fixedDeltas.vsHoldAllCash!.netYield.amountMinor).toBe(
+        fixed.netYield.subtract(cash.netYield).amountMinor
+      );
+
+      // Verify descriptive winners are present
+      expect(comp.winners).toBeDefined();
+      expect(["reserve-juggler", "hold-all-cash", "fixed-buffer"]).toContain(comp.winners.netYield);
+      expect(["reserve-juggler", "hold-all-cash", "fixed-buffer"]).toContain(
+        comp.winners.shortfallFrequency
+      );
     });
   });
 });

@@ -8,6 +8,7 @@ import {
 import { GET as getSimulationByIdHandler } from "@/app/api/simulations/[id]/route";
 import { simulationsRepo, type SimulationRecord } from "@/server/repositories/simulations";
 import { instrumentsRepo, type Instrument as StoredInstrument } from "@/server/repositories/instruments";
+import { decisionsRepo, type DecisionRecord } from "@/server/repositories/decisions";
 import { auditRepo, type AuditRecord } from "@/server/repositories/audit";
 import { Money } from "@/engine/money";
 import {
@@ -78,11 +79,36 @@ function createRequest(
 }
 
 describe("Stress Simulations API Routes (Phase 18)", () => {
+  const mockDecision: DecisionRecord = {
+    id: "dec_1",
+    orgId: "org_treasury",
+    forecastId: "fc_1",
+    confidence: 0.99,
+    reserveMinor: "200000000",
+    surplusMinor: "800000000",
+    availableCashMinor: "5000000000",
+    deployedTotalMinor: "0",
+    operationalFloorMinor: "200000000",
+    horizonHours: 24,
+    alpha: 0.01,
+    expectedCumulativeFlowMinor: "0",
+    worstCaseResidualShortfallMinor: "0",
+    backtest: undefined,
+    allocations: [],
+    status: "HEALTHY",
+    expectedNetYieldMinor: "0",
+    explanation: "Baseline decision",
+    source: "synthetic",
+    createdAt: new Date(),
+    createdBy: "admin",
+  } as unknown as DecisionRecord;
+
   beforeEach(() => {
     setTokenVerifier(new TestTokenVerifier());
     setMembershipStore(new TestMembershipStore());
     _resetSimulationRateLimiter();
     vi.restoreAllMocks();
+    vi.spyOn(decisionsRepo, "list").mockResolvedValue([mockDecision]);
   });
 
   const validScenario = {
@@ -254,6 +280,59 @@ describe("Stress Simulations API Routes (Phase 18)", () => {
       expect(json.ok).toBe(false);
       expect(json.error.code).toBe("VALIDATION_ERROR");
       expect(json.error.message).toContain("No configured instruments found");
+    });
+
+    it("returns 400 VALIDATION_ERROR if org has no baseline decision and no synthetic starting cash", async () => {
+      vi.spyOn(instrumentsRepo, "list").mockResolvedValue([mockInstrument]);
+      vi.spyOn(decisionsRepo, "list").mockResolvedValue([]);
+
+      const req = createRequest("http://localhost:3000/api/simulations", {
+        method: "POST",
+        token: "valid-analyst-token",
+        orgId: "org_treasury",
+        body: { scenario: validScenario },
+      });
+
+      const res = await runSimulationHandler(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.ok).toBe(false);
+      expect(json.error.code).toBe("VALIDATION_ERROR");
+      expect(json.error.message).toContain("Run the engine on the dashboard first so a cash baseline exists");
+    });
+
+    it("succeeds without stored decision when source is synthetic and startingCash is explicitly provided", async () => {
+      vi.spyOn(instrumentsRepo, "list").mockResolvedValue([mockInstrument]);
+      vi.spyOn(decisionsRepo, "list").mockResolvedValue([]);
+      vi.spyOn(simulationsRepo, "create").mockResolvedValue({
+        id: "sim_synth",
+        orgId: "org_treasury",
+        scenario: validScenario,
+        seed: "synth-seed",
+        policy: "reserve-juggler",
+        metrics: {},
+        source: "synthetic",
+        createdAt: new Date(),
+        createdBy: "analyst-1",
+      });
+      vi.spyOn(auditRepo, "append").mockResolvedValue({} as unknown as AuditRecord);
+
+      const req = createRequest("http://localhost:3000/api/simulations", {
+        method: "POST",
+        token: "valid-analyst-token",
+        orgId: "org_treasury",
+        body: {
+          scenario: validScenario,
+          source: "synthetic",
+          startingCash: "5000000000",
+        },
+      });
+
+      const res = await runSimulationHandler(req);
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.ok).toBe(true);
+      expect(json.data.source).toBe("synthetic");
     });
 
     it("executes simulation, writes to simulationsRepo and auditRepo on success", async () => {

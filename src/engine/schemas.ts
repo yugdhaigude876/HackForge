@@ -339,7 +339,55 @@ export const SimulationRequestSchema = z.object({
 
   /** Emergency borrowing rate in basis points annualized (default: 1000 = 10%) */
   emergencyBorrowingRateBps: z.number().int().nonnegative().optional().default(1000),
+
+  /** Explicit starting cash minor units string when running synthetic baseline without stored decision */
+  startingCash: z.string().regex(/^\d+$/).optional(),
+
+  /** Source tag ('synthetic' allows startingCash fallback without stored decision) */
+  source: z.enum(["synthetic", "import", "live"]).optional(),
 });
 
 export type SimulationRequest = z.infer<typeof SimulationRequestSchema>;
+
+export const PolicyComparisonRequestSchema = z.object({
+  /** Stress test scenario configuration */
+  scenario: ScenarioSchema,
+
+  /** Policies to compare side-by-side (1 to 3 distinct policies) */
+  policies: z
+    .array(PolicyTypeEnum)
+    .min(1)
+    .max(3)
+    .optional()
+    .default(["reserve-juggler", "hold-all-cash", "fixed-buffer"]),
+
+  /** Optional parameters for specific policies */
+  policyParams: z
+    .object({
+      /** For fixed-buffer policy: fraction of cash retained as liquid reserve [0, 1] */
+      bufferPct: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
+
+  /** Simulation horizon in hours (1..168, default: 24) */
+  horizonHours: z.number().int().positive().max(168).optional().default(24),
+
+  /** Number of Monte Carlo bootstrap trials per policy (1..1000, default: 500) */
+  trials: z.number().int().positive().max(1000).optional().default(500),
+
+  /** PRNG seed for exact reproducibility across all compared policies */
+  seed: z.string().optional(),
+
+  /** Emergency borrowing rate in basis points annualized (default: 1000 = 10%) */
+  emergencyBorrowingRateBps: z.number().int().nonnegative().optional().default(1000),
+
+  /** Explicit starting cash minor units string when running synthetic baseline without stored decision */
+  startingCash: z.string().regex(/^\d+$/).optional(),
+
+  /** Source tag ('synthetic' allows startingCash fallback without stored decision) */
+  source: z.enum(["synthetic", "import", "live"]).optional(),
+});
+
+export type PolicyComparisonRequest = z.infer<typeof PolicyComparisonRequestSchema>;
+
 

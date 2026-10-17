@@ -16,14 +16,33 @@ import { buildContinuousTimeSeries } from "@/engine/timeseries";
 import type { OrgAuthContext } from "@/server/auth";
 
 // ---------------------------------------------------------------------------
-// Rate Limiter / Debouncer
+// Rate Limiter / Debouncer (Best-effort per serverless container)
 // ---------------------------------------------------------------------------
 
+/**
+ * Best-effort in-memory rate limiter per serverless container instance.
+ * Note: Across multiple serverless instances, this is best-effort and does not provide
+ * a distributed hard guarantee. It prevents rapid repeated client-side hammering within a single node.
+ */
 const orgLastSimTime = new Map<string, number>();
 export const MIN_SIM_INTERVAL_MS = 10_000;
 
 export function _resetSimulationRateLimiter(): void {
   orgLastSimTime.clear();
+}
+
+export function checkSimulationRateLimit(orgId: string): { allowed: boolean; retryAfterSeconds: number } {
+  const lastRun = orgLastSimTime.get(orgId);
+  const now = Date.now();
+  if (lastRun && now - lastRun < MIN_SIM_INTERVAL_MS) {
+    const retryAfterSeconds = Math.ceil((MIN_SIM_INTERVAL_MS - (now - lastRun)) / 1000);
+    return { allowed: false, retryAfterSeconds };
+  }
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+export function recordSimulationRun(orgId: string): void {
+  orgLastSimTime.set(orgId, Date.now());
 }
 
 /**
@@ -48,6 +67,7 @@ function serializeSimulationResult(result: SimulationResult) {
       p50Minor: result.minCash.p50.amountMinor.toString(),
       p95Minor: result.minCash.p95.amountMinor.toString(),
     },
+    meanIdleCashMinor: result.meanIdleCash.amountMinor.toString(),
     idleCashHoursMinor: result.idleCashHours.amountMinor.toString(),
     cashPath: result.cashPath.map((p) => ({
       hour: p.hour,
@@ -131,9 +151,10 @@ export const POST = withAuth(
       orgInstruments = stored.map((inst) => ({
         id: inst.id,
         name: inst.name,
-        apy: inst.annualRateBps,
+        // Boundary conversion: database basis points to engine decimal fraction
+        apy: inst.annualRateBps / 10_000,
         capacity: Money.fromMinor(inst.capacityMinor, "USD"),
-        withdrawalPenalty: inst.penaltyBps,
+        withdrawalPenalty: inst.penaltyBps !== undefined ? inst.penaltyBps / 10_000 : 0,
         settlementLagHours: inst.settlementLagHours,
         minHoldHours: inst.minHoldHours,
       }));
@@ -150,16 +171,20 @@ export const POST = withAuth(
     }
 
     // Load latest decision to obtain cash baseline and existing holdings
-    let startingCash = Money.fromMinor(50_000_000_00n, "USD");
+    let startingCash: Money | null = null;
     let operationalFloor = Money.fromMinor(2_000_000_00n, "USD");
     const currentHoldings: AllocatedHolding[] = [];
-    let isSyntheticSource = false;
+    let isSyntheticSource = inputData.source === "synthetic";
+
+    if (isSyntheticSource && inputData.startingCash) {
+      startingCash = Money.fromMinor(BigInt(inputData.startingCash), "USD");
+    }
 
     try {
       const latestDecisions = await decisionsRepo.list(orgId, { limit: 1 });
       if (latestDecisions.length > 0) {
         const dec = latestDecisions[0];
-        if (dec.availableCashMinor) {
+        if (!startingCash && dec.availableCashMinor) {
           startingCash = Money.fromMinor(dec.availableCashMinor, "USD");
         }
         if (dec.operationalFloorMinor) {
@@ -182,6 +207,14 @@ export const POST = withAuth(
       }
     } catch (err) {
       console.warn("[simulationsRoute] Error fetching latest decision:", err);
+    }
+
+    if (!startingCash) {
+      return createErrorResponse(
+        400,
+        "VALIDATION_ERROR",
+        "Run the engine on the dashboard first so a cash baseline exists"
+      );
     }
 
     // Load historical buckets from seriesRepo

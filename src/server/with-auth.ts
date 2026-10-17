@@ -16,7 +16,8 @@ export type ApiErrorCode =
   | "FORBIDDEN"
   | "VALIDATION_ERROR"
   | "INTERNAL"
-  | "NOT_FOUND";
+  | "NOT_FOUND"
+  | "RATE_LIMITED";
 
 export interface ApiErrorPayload {
   ok: false;

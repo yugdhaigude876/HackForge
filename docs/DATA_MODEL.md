@@ -18,7 +18,7 @@ Conventions:
 | `orgs/{orgId}/series/{bucketId}` | `bucketId: string` (safe ISO hour, e.g. `"2026-03-01T14-00-00Z"`)<br>`orgId: string`<br>`hourStart: Timestamp`<br>`inMinor: string`<br>`outMinor: string`<br>`updatedAt: Timestamp` | Pre-aggregated hourly net-flow buckets for fast chart and engine querying. |
 | `orgs/{orgId}/forecasts/{id}` | `id: string`<br>`orgId: string`<br>`method: string`<br>`params: Record<string, unknown>`<br>`asOf: Timestamp`<br>`horizon: number`<br>`points: Array<{ ts: Timestamp, meanMinor: string, bandLowerMinor?: string, bandUpperMinor?: string }>`<br>`residualQuantiles: Record<string, number>`<br>`backtest: { mase: number, pinball: number, skillVsBaseline?: number, sampleSize?: number }`<br>`source?: "synthetic" \| "production"`<br>`createdAt: Timestamp`<br>`createdBy: string` | Point and probabilistic forecasts produced by the forecasting engine with residual quantile uncertainty bands. |
 | `orgs/{orgId}/decisions/{id}` | `id: string`<br>`orgId: string`<br>`forecastId: string`<br>`confidence: number`<br>`reserveMinor: string`<br>`surplusMinor: string`<br>`availableCashMinor: string`<br>`deployedTotalMinor?: string`<br>`operationalFloorMinor?: string`<br>`horizonHours?: number`<br>`alpha?: number`<br>`expectedCumulativeFlowMinor?: string`<br>`worstCaseResidualShortfallMinor?: string`<br>`backtest?: { mase: number, sampleSize?: number }`<br>`allocations: Array<{ instrumentId: string, name?: string, amountMinor: string, annualRateBps?: number, settlementLagHours?: number, penaltyBps?: number, capacityMinor?: string }>`<br>`status: string`<br>`expectedNetYieldMinor: string`<br>`explanation: string`<br>`source?: "synthetic" \| "production"`<br>`createdAt: Timestamp`<br>`createdBy: string` | Liquidity reserve optimizations and portfolio allocations including cash balance snapshots and instrument parameters. |
-| `orgs/{orgId}/simulations/{id}` | `id: string`<br>`orgId: string`<br>`scenario: string \| Record<string, unknown>`<br>`seed: number \| string`<br>`policy: string \| Record<string, unknown>`<br>`metrics: Record<string, unknown>`<br>`source?: "synthetic" \| "import" \| "live"`<br>`createdAt: Timestamp`<br>`createdBy: string` | Stress scenario simulation and Digital Twin runs with serialized Money metrics and cash paths. |
+| `orgs/{orgId}/simulations/{id}` | `id: string`<br>`orgId: string`<br>`comparisonId?: string`<br>`scenario: string \| Record<string, unknown>`<br>`seed: number \| string`<br>`policy: string \| Record<string, unknown>`<br>`metrics: Record<string, unknown>`<br>`source?: "synthetic" \| "import" \| "live"`<br>`createdAt: Timestamp`<br>`createdBy: string` | Stress scenario simulation and Digital Twin runs with serialized Money metrics (including `meanIdleCashMinor` and `idleCashHoursMinor`) and cash paths. |
 | `orgs/{orgId}/audit/{id}` | `id: string`<br>`orgId: string`<br>`actorUid: string`<br>`action: string`<br>`refPath: string`<br>`beforeHash?: string`<br>`afterHash?: string`<br>`ts: Timestamp`<br>`createdAt: Timestamp` | **Strictly append-only** immutable audit log for compliance. |
 
 ## Security Rules (`firestore.rules`)
@@ -31,6 +31,7 @@ Conventions:
 The following composite indexes are configured in `firestore.indexes.json` to back repository queries:
 1. `transactions`: `type ASC`, `ts DESC` (filtered time-range queries).
 2. `simulations`: `scenario ASC`, `createdAt DESC` (scenario-filtered simulation history).
-3. `decisions`: `createdAt DESC` (chronological decision logs).
-4. `forecasts`: `createdAt DESC` (chronological forecast runs).
-5. `audit`: `ts DESC` (chronological audit history).
+3. `simulations`: `comparisonId ASC`, `createdAt DESC` (multi-policy comparison replay queries).
+4. `decisions`: `createdAt DESC` (chronological decision logs).
+5. `forecasts`: `createdAt DESC` (chronological forecast runs).
+6. `audit`: `ts DESC` (chronological audit history).

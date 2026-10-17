@@ -149,6 +149,7 @@ export const DecisionDocSchema = z.object({
 export const SimulationDocSchema = z.object({
   id: z.string().min(1),
   orgId: z.string().min(1),
+  comparisonId: z.string().optional(),
   scenario: z.union([z.string(), z.record(z.string(), z.unknown())]),
   seed: z.union([z.number(), z.string()]),
   policy: z.union([z.string(), z.record(z.string(), z.unknown())]),

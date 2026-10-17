@@ -8,6 +8,7 @@ import { SimulationDocSchema, validateDoc } from "./schemas";
 export interface SimulationRecord {
   id: string;
   orgId: string;
+  comparisonId?: string;
   scenario: string | Record<string, unknown>;
   seed: number | string;
   policy: string | Record<string, unknown>;
@@ -19,6 +20,7 @@ export interface SimulationRecord {
 
 export interface CreateSimulationInput {
   id?: string;
+  comparisonId?: string;
   scenario: string | Record<string, unknown>;
   seed: number | string;
   policy: string | Record<string, unknown>;
@@ -48,6 +50,7 @@ export const simulationsRepo = {
     const docData = {
       id,
       orgId: validOrgId,
+      ...(input.comparisonId ? { comparisonId: input.comparisonId } : {}),
       scenario: input.scenario,
       seed: input.seed,
       policy: input.policy,
@@ -63,6 +66,7 @@ export const simulationsRepo = {
     return {
       id,
       orgId: validOrgId,
+      comparisonId: input.comparisonId,
       scenario: input.scenario,
       seed: input.seed,
       policy: input.policy,
@@ -90,6 +94,7 @@ export const simulationsRepo = {
     return {
       id: data.id,
       orgId: validOrgId,
+      comparisonId: data.comparisonId,
       scenario: data.scenario,
       seed: data.seed,
       policy: data.policy,
@@ -126,6 +131,42 @@ export const simulationsRepo = {
       return {
         id: data.id,
         orgId: validOrgId,
+        comparisonId: data.comparisonId,
+        scenario: data.scenario,
+        seed: data.seed,
+        policy: data.policy,
+        metrics: data.metrics,
+        source: data.source,
+        createdAt: toDate(data.createdAt),
+        createdBy: data.createdBy,
+      };
+    });
+  },
+
+  /**
+   * Lists simulation records for a specific comparison ID ordered newest first.
+   */
+  async listByComparisonId(
+    orgId: string,
+    comparisonId: string,
+    firestore?: Firestore
+  ): Promise<SimulationRecord[]> {
+    const validOrgId = validateId(orgId, "orgId");
+    const validCmpId = validateId(comparisonId, "comparisonId");
+    const db = firestore ?? getAdminFirestore();
+
+    const snap = await db
+      .collection(`orgs/${validOrgId}/simulations`)
+      .where("comparisonId", "==", validCmpId)
+      .orderBy("createdAt", "desc")
+      .get();
+
+    return snap.docs.map((d) => {
+      const data = validateDoc(SimulationDocSchema, d.data(), d.id);
+      return {
+        id: data.id,
+        orgId: validOrgId,
+        comparisonId: data.comparisonId,
         scenario: data.scenario,
         seed: data.seed,
         policy: data.policy,

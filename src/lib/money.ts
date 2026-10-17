@@ -17,8 +17,8 @@ const usdWhole = new Intl.NumberFormat("en-US", {
 /**
  * Format integer minor units (cents) as whole-dollar currency. Display only.
  */
-export function formatMinor(minor: Minor): string {
-  const num = typeof minor === "bigint" ? Number(minor) : minor;
+export function formatMinor(minor: Minor | bigint | string): string {
+  const num = typeof minor === "string" ? Number(minor) : typeof minor === "bigint" ? Number(minor) : minor;
   return usdWhole.format(Math.trunc(num / 100));
 }
 
