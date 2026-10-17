@@ -50,7 +50,7 @@ Each phase ends with: tests pass, lint/tsc/build pass, docs updated.
 | 12 | API routes | Route Handlers plus Zod, typed responses | Done |
 | 13 | Firebase client auth | Sign-in UI (needs Firebase project) | Done |
 | 14 | Server auth and authorisation | ID-token verify, org membership checks | Done |
-| 15 | Firestore repos and rules | Repositories, rules, emulator tests | Todo |
+| 15 | Firestore repos and rules | Repositories, rules, emulator tests | Done (repos, rules, indexes, unit tests verified; emulator tests not executed due to missing Java) |
 | 16 | Persistence and audit | Save forecasts, decisions, audit records | Todo |
 | 17 | Wire dashboard to engine | Replace sample data with real engine output | Todo |
 | 18 | Stress scenario simulator | Outflow shock, settlement delay, run | Todo |

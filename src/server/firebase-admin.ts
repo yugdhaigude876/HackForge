@@ -87,16 +87,30 @@ export function getAdminAuth(): Auth {
   return getAuth(getAdminApp());
 }
 
+let customAdminFirestore: Firestore | null = null;
+
 /**
  * Returns the Firebase Admin Firestore instance.
+ * Allows custom Firestore handle injection for tests or emulators.
  */
 export function getAdminFirestore(): Firestore {
+  if (customAdminFirestore) {
+    return customAdminFirestore;
+  }
   return getFirestore(getAdminApp());
 }
 
 /**
- * Test helper to reset internal singleton cache.
+ * Sets a custom Firestore instance (e.g. in-memory stub or emulator) for testing.
+ */
+export function setAdminFirestore(firestore: Firestore | null): void {
+  customAdminFirestore = firestore;
+}
+
+/**
+ * Test helper to reset internal singleton caches.
  */
 export function _resetAdminAppForTesting(): void {
   cachedAdminApp = null;
+  customAdminFirestore = null;
 }

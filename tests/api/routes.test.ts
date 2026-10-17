@@ -143,7 +143,7 @@ describe("API Security & Authorization: Token and Org Authorization", () => {
     const json = await res.json();
     expect(json.ok).toBe(false);
     expect(json.error.code).toBe("FORBIDDEN");
-    expect(json.error.message).toContain("not a member");
+    expect(json.error.message).toBe("Not a member of this organisation.");
   });
 
   it("returns 403 FORBIDDEN when user is viewer but route requires analyst", async () => {
@@ -154,7 +154,7 @@ describe("API Security & Authorization: Token and Org Authorization", () => {
     const json = await res.json();
     expect(json.ok).toBe(false);
     expect(json.error.code).toBe("FORBIDDEN");
-    expect(json.error.message).toContain("Required minimum role: 'analyst'");
+    expect(json.error.message).toBe("Insufficient organisation permissions.");
   });
 
   it("returns 200 when user role is analyst or admin", async () => {

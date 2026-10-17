@@ -1,7 +1,7 @@
 import "server-only";
 
 import { NextRequest } from "next/server";
-import { getAdminAuth, getAdminFirestore } from "./firebase-admin";
+import { getAdminAuth } from "./firebase-admin";
 
 export type OrgRole = "viewer" | "analyst" | "admin";
 
@@ -77,19 +77,17 @@ export class AdminTokenVerifier implements TokenVerifier {
   }
 }
 
+import { membersRepo } from "./repositories/members";
+
 export class FirestoreMembershipStore implements MembershipStore {
   async getRole(orgId: string, uid: string): Promise<OrgRole | null> {
-    const firestore = getAdminFirestore();
-    const memberDoc = await firestore.doc(`orgs/${orgId}/members/${uid}`).get();
-    if (!memberDoc.exists) {
+    try {
+      const member = await membersRepo.get(orgId, uid);
+      return member?.role ?? null;
+    } catch (err) {
+      console.error(`Failed to retrieve member role for uid=${uid} in org=${orgId}:`, err);
       return null;
     }
-    const data = memberDoc.data();
-    const role = data?.role;
-    if (role === "admin" || role === "analyst" || role === "viewer") {
-      return role as OrgRole;
-    }
-    return null;
   }
 }
 
@@ -138,8 +136,8 @@ export async function requireUser(request: Request | NextRequest): Promise<Authe
   try {
     return await activeTokenVerifier.verifyIdToken(idToken, true);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Token verification failed.";
-    throw new UnauthenticatedError(`Invalid, expired or revoked ID token: ${message}`);
+    console.error("Token verification failed:", err);
+    throw new UnauthenticatedError("Invalid, expired or revoked ID token.");
   }
 }
 
@@ -161,13 +159,15 @@ export async function requireOrgMember(
 
   const role = await activeMembershipStore.getRole(orgId, user.uid);
   if (!role) {
-    throw new ForbiddenError(`User '${user.uid}' is not a member of organisation '${orgId}'.`);
+    console.error(`User ${user.uid} is not a member of organisation ${orgId}.`);
+    throw new ForbiddenError("Not a member of this organisation.");
   }
 
   if (!hasRequiredRole(role, minRole)) {
-    throw new ForbiddenError(
-      `Role '${role}' is insufficient for organisation '${orgId}'. Required minimum role: '${minRole}'.`
+    console.error(
+      `User ${user.uid} role '${role}' is below required minimum role '${minRole}' for organisation ${orgId}.`
     );
+    throw new ForbiddenError("Insufficient organisation permissions.");
   }
 
   return { user, orgId, role };

@@ -1,0 +1,133 @@
+import "server-only";
+
+import type { Firestore, Query } from "firebase-admin/firestore";
+import { getAdminFirestore } from "../firebase-admin";
+import { validateId, clampLimit, toDate, toTimestamp } from "./common";
+import { SimulationDocSchema, validateDoc } from "./schemas";
+
+export interface SimulationRecord {
+  id: string;
+  orgId: string;
+  scenario: string;
+  seed: number;
+  policy: string | Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  createdAt: Date;
+  createdBy: string;
+}
+
+export interface CreateSimulationInput {
+  id?: string;
+  scenario: string;
+  seed: number;
+  policy: string | Record<string, unknown>;
+  metrics: Record<string, unknown>;
+}
+
+export const simulationsRepo = {
+  /**
+   * Persists a simulation run record.
+   */
+  async create(
+    orgId: string,
+    input: CreateSimulationInput,
+    actorUid: string,
+    firestore?: Firestore
+  ): Promise<SimulationRecord> {
+    const validOrgId = validateId(orgId, "orgId");
+    const validActor = validateId(actorUid, "actorUid");
+    const db = firestore ?? getAdminFirestore();
+
+    const colRef = db.collection(`orgs/${validOrgId}/simulations`);
+    const docRef = input.id ? colRef.doc(validateId(input.id, "simulationId")) : colRef.doc();
+    const id = docRef.id;
+
+    const now = new Date();
+    const docData = {
+      id,
+      orgId: validOrgId,
+      scenario: input.scenario,
+      seed: input.seed,
+      policy: input.policy,
+      metrics: input.metrics,
+      createdAt: toTimestamp(now),
+      createdBy: validActor,
+    };
+
+    validateDoc(SimulationDocSchema, docData, id);
+    await docRef.set(docData);
+
+    return {
+      id,
+      orgId: validOrgId,
+      scenario: input.scenario,
+      seed: input.seed,
+      policy: input.policy,
+      metrics: input.metrics,
+      createdAt: now,
+      createdBy: validActor,
+    };
+  },
+
+  /**
+   * Retrieves a simulation record by ID.
+   */
+  async get(orgId: string, id: string, firestore?: Firestore): Promise<SimulationRecord | null> {
+    const validOrgId = validateId(orgId, "orgId");
+    const validId = validateId(id, "id");
+    const db = firestore ?? getAdminFirestore();
+
+    const snap = await db.doc(`orgs/${validOrgId}/simulations/${validId}`).get();
+    if (!snap.exists) {
+      return null;
+    }
+
+    const data = validateDoc(SimulationDocSchema, snap.data(), snap.id);
+    return {
+      id: data.id,
+      orgId: validOrgId,
+      scenario: data.scenario,
+      seed: data.seed,
+      policy: data.policy,
+      metrics: data.metrics,
+      createdAt: toDate(data.createdAt),
+      createdBy: data.createdBy,
+    };
+  },
+
+  /**
+   * Lists simulations ordered newest first with bounded pagination.
+   * Can optionally filter by scenario.
+   */
+  async list(
+    orgId: string,
+    options: { limit?: number; scenario?: string } = {},
+    firestore?: Firestore
+  ): Promise<SimulationRecord[]> {
+    const validOrgId = validateId(orgId, "orgId");
+    const take = clampLimit(options.limit);
+    const db = firestore ?? getAdminFirestore();
+
+    let query: Query = db.collection(`orgs/${validOrgId}/simulations`);
+
+    if (options.scenario) {
+      query = query.where("scenario", "==", options.scenario);
+    }
+
+    const snap = await query.orderBy("createdAt", "desc").limit(take).get();
+
+    return snap.docs.map((d) => {
+      const data = validateDoc(SimulationDocSchema, d.data(), d.id);
+      return {
+        id: data.id,
+        orgId: validOrgId,
+        scenario: data.scenario,
+        seed: data.seed,
+        policy: data.policy,
+        metrics: data.metrics,
+        createdAt: toDate(data.createdAt),
+        createdBy: data.createdBy,
+      };
+    });
+  },
+};

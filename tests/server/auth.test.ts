@@ -78,12 +78,12 @@ describe("Server Auth: requireUser and requireOrgMember", () => {
     const expiredReq = new NextRequest("http://localhost:3000/api/test", {
       headers: { Authorization: "Bearer expired-token" },
     });
-    await expect(requireUser(expiredReq)).rejects.toThrow("Token has expired");
+    await expect(requireUser(expiredReq)).rejects.toThrow("Invalid, expired or revoked ID token.");
 
     const revokedReq = new NextRequest("http://localhost:3000/api/test", {
       headers: { Authorization: "Bearer revoked-token" },
     });
-    await expect(requireUser(revokedReq)).rejects.toThrow("Token has been revoked");
+    await expect(requireUser(revokedReq)).rejects.toThrow("Invalid, expired or revoked ID token.");
   });
 
   it("returns verified user when valid Bearer token is provided", async () => {
@@ -101,7 +101,7 @@ describe("Server Auth: requireUser and requireOrgMember", () => {
     });
     await expect(requireOrgMember(req, "org_nonexistent", "viewer")).rejects.toThrow(ForbiddenError);
     await expect(requireOrgMember(req, "org_nonexistent", "viewer")).rejects.toThrow(
-      "is not a member of organisation 'org_nonexistent'"
+      "Not a member of this organisation."
     );
   });
 
@@ -112,7 +112,7 @@ describe("Server Auth: requireUser and requireOrgMember", () => {
     });
     await expect(requireOrgMember(req, "org_alpha", "analyst")).rejects.toThrow(ForbiddenError);
     await expect(requireOrgMember(req, "org_alpha", "analyst")).rejects.toThrow(
-      "Role 'viewer' is insufficient for organisation 'org_alpha'. Required minimum role: 'analyst'."
+      "Insufficient organisation permissions."
     );
   });
 

@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all reads and writes
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper function: Checks if the requesting user is authenticated and an active member of the organisation
+    function isOrgMember(orgId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid));
+    }
+
+    // Helper function: Gets the member's role document for role-based checks if needed
+    function getMemberData(orgId) {
+      return get(/databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid)).data;
+    }
+
+    // Organisation documents and subcollections
+    match /orgs/{orgId} {
+      // Authenticated members of this organisation can view organisation metadata
+      allow read: if isOrgMember(orgId);
+      // All organisation-level writes must go through the server Admin SDK
+      allow write: if false;
+
+      // Members subcollection: orgs/{orgId}/members/{uid}
+      match /members/{uid} {
+        // Members can read membership rosters within their organisation
+        allow read: if isOrgMember(orgId);
+        // Direct client writes are forbidden; member provisioning and role management
+        // must be performed server-side with Admin SDK privileges
+        allow write: if false;
+      }
+
+      // Instruments subcollection: orgs/{orgId}/instruments/{instrumentId}
+      match /instruments/{instrumentId} {
+        // Org members can read yield instruments and constraints
+        allow read: if isOrgMember(orgId);
+        // Portfolio instruments are financial assets configured exclusively through server routes
+        allow write: if false;
+      }
+
+      // Transactions subcollection: orgs/{orgId}/transactions/{transactionId}
+      match /transactions/{transactionId} {
+        // Org members can read raw transaction records
+        allow read: if isOrgMember(orgId);
+        // Direct transaction creation by clients is forbidden; all transactions
+        // are ingested or synthetically generated through validated server APIs
+        allow write: if false;
+      }
+
+      // Series subcollection (pre-aggregated hourly net-flow): orgs/{orgId}/series/{bucketId}
+      match /series/{bucketId} {
+        // Org members can read aggregated timeseries for charting and dashboard analytics
+        allow read: if isOrgMember(orgId);
+        // Series aggregations are calculated exclusively by the backend engine
+        allow write: if false;
+      }
+
+      // Forecasts subcollection: orgs/{orgId}/forecasts/{forecastId}
+      match /forecasts/{forecastId} {
+        // Org members can read forecast points and backtest metrics
+        allow read: if isOrgMember(orgId);
+        // Forecasts are computational artifacts produced exclusively by the forecasting engine
+        allow write: if false;
+      }
+
+      // Decisions subcollection: orgs/{orgId}/decisions/{decisionId}
+      match /decisions/{decisionId} {
+        // Org members can read reserve decisions and allocation breakdowns
+        allow read: if isOrgMember(orgId);
+        // Decisions are computed by the reserve optimizer and must be persisted server-side
+        allow write: if false;
+      }
+
+      // Simulations subcollection: orgs/{orgId}/simulations/{simulationId}
+      match /simulations/{simulationId} {
+        // Org members can read stress scenario simulation outputs
+        allow read: if isOrgMember(orgId);
+        // Digital twin simulation runs are executed exclusively via server routes
+        allow write: if false;
+      }
+
+      // Audit subcollection: orgs/{orgId}/audit/{auditId}
+      match /audit/{auditId} {
+        // Org members can read audit trails for compliance reporting
+        allow read: if isOrgMember(orgId);
+        // CRITICAL IMMUTABILITY RULE: Audit logs are strictly append-only on the server.
+        // No client (even org admins) may create, update, or delete audit records.
+        allow create, update, delete: if false;
+      }
+    }
+  }
+}
