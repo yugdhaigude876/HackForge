@@ -45,6 +45,22 @@ describe("Money Module", () => {
       expect(z.currency).toBe("USD");
     });
 
+    it("creates money from major units (dollars)", () => {
+      const m1 = Money.fromMajor(25, "USD");
+      expect(m1.amountMinor).toBe(2500n);
+      expect(m1.currency).toBe("USD");
+
+      const m2 = Money.fromMajor(20_000_000n, "USD");
+      expect(m2.amountMinor).toBe(2_000_000_000n);
+
+      const m3 = Money.fromMajor("100.50", "USD");
+      expect(m3.amountMinor).toBe(10050n);
+
+      const m4 = Money.fromMajor("50", "EUR");
+      expect(m4.amountMinor).toBe(5000n);
+      expect(m4.currency).toBe("EUR");
+    });
+
     it("rejects non-integer numbers for fromMinor", () => {
       expect(() => Money.fromMinor(12.34)).toThrow(InvalidMoneyError);
       expect(() => Money.fromMinor(NaN)).toThrow(InvalidMoneyError);

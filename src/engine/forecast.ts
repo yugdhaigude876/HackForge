@@ -104,9 +104,14 @@ export class SeasonalNaiveForecaster implements Forecaster {
   readonly seasonalLag: number;
   readonly fallbackToNaive: boolean;
 
-  constructor(options?: SeasonalNaiveOptions) {
-    this.seasonalLag = options?.seasonalLag ?? HOURS_IN_WEEK;
-    this.fallbackToNaive = options?.fallbackToNaive ?? false;
+  constructor(options?: number | SeasonalNaiveOptions) {
+    if (typeof options === "number") {
+      this.seasonalLag = options;
+      this.fallbackToNaive = false;
+    } else {
+      this.seasonalLag = options?.seasonalLag ?? HOURS_IN_WEEK;
+      this.fallbackToNaive = options?.fallbackToNaive ?? false;
+    }
 
     if (this.seasonalLag <= 0 || !Number.isInteger(this.seasonalLag)) {
       throw new InvalidForecastParameterError(

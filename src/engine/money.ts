@@ -127,6 +127,33 @@ export class Money {
   }
 
   /**
+   * Create Money from major currency units (whole dollars/euros).
+   * E.g. Money.fromMajor(20_000_000) -> 2,000,000,000 cents.
+   */
+  static fromMajor(
+    major: bigint | number | string,
+    currency: CurrencyCode = "USD"
+  ): Money {
+    if (typeof major === "number") {
+      if (!Number.isSafeInteger(major)) {
+        return Money.fromDecimal(major.toString(), currency);
+      }
+      return new Money(BigInt(major) * 100n, currency);
+    }
+    if (typeof major === "bigint") {
+      return new Money(major * 100n, currency);
+    }
+    if (typeof major === "string") {
+      const trimmed = major.trim();
+      if (trimmed.includes(".")) {
+        return Money.fromDecimal(trimmed, currency);
+      }
+      return new Money(BigInt(trimmed) * 100n, currency);
+    }
+    throw new InvalidMoneyError(`Unsupported major amount type: ${typeof major}`);
+  }
+
+  /**
    * Zero money in specified currency.
    */
   static zero(currency: CurrencyCode = "USD"): Money {

@@ -188,6 +188,9 @@ export function buildContinuousTimeSeries(
   return result;
 }
 
+/** Alias for buildContinuousTimeSeries */
+export const buildContinuousHourlySeries = buildContinuousTimeSeries;
+
 /**
  * Ensures an existing array of sparse HourlyBuckets is filled with zero-buckets for any missing hours.
  */
@@ -240,12 +243,32 @@ export function fillTimeSeriesGaps(
  * @param horizonHours Number of future hours for target evaluation (e.g., 24 for next day)
  * @param stepHours Step interval between windows (default: 1 hour)
  */
+export interface RollingWindowsOptions {
+  lookbackHours: number;
+  horizonHours: number;
+  stepHours?: number;
+}
+
 export function createRollingWindows(
   series: readonly HourlyBucket[],
-  lookbackHours: number,
-  horizonHours: number,
-  stepHours = 1
+  lookbackOrOptions: number | RollingWindowsOptions,
+  horizonHoursParam?: number,
+  stepHoursParam = 1
 ): RollingWindow[] {
+  let lookbackHours: number;
+  let horizonHours: number;
+  let stepHours: number;
+
+  if (typeof lookbackOrOptions === "object" && lookbackOrOptions !== null) {
+    lookbackHours = lookbackOrOptions.lookbackHours;
+    horizonHours = lookbackOrOptions.horizonHours;
+    stepHours = lookbackOrOptions.stepHours ?? 1;
+  } else {
+    lookbackHours = lookbackOrOptions;
+    horizonHours = horizonHoursParam as number;
+    stepHours = stepHoursParam;
+  }
+
   if (lookbackHours <= 0 || !Number.isInteger(lookbackHours)) {
     throw new Error(`lookbackHours must be a positive integer, received: ${lookbackHours}`);
   }
