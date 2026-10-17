@@ -93,3 +93,42 @@ export interface HourlyBucket {
   /** Count of processed transactions */
   transactionCount: number;
 }
+
+/**
+ * Yield investment instrument for deployable surplus allocation.
+ */
+export interface Instrument {
+  /** Unique instrument identifier (e.g. "i1", "sweep-overnight") */
+  id: string;
+
+  /** Display name of the financial instrument */
+  name: string;
+
+  /**
+   * Annual Percentage Yield (APY) as a decimal fraction (e.g. 0.045 = 4.50%)
+   * or basis points (e.g. 450 bps). If apy > 1, it is treated as basis points.
+   */
+  apy: number;
+
+  /** Maximum deployment capacity held in strict Money units */
+  capacity: Money;
+
+  /**
+   * Early withdrawal penalty rate as a decimal fraction (e.g. 0.0015 = 0.15% = 15 bps)
+   * or in basis points (e.g. 15). If withdrawalPenalty > 1, it is treated as basis points.
+   */
+  withdrawalPenalty: number;
+
+  /** Settlement lag in hours before funds become liquid (e.g. 0 for instant, 24 for T+1) */
+  settlementLagHours?: number;
+
+  /** Minimum required hold duration in hours */
+  minHoldHours?: number;
+
+  /**
+   * Probability pi_i in [0, 1] that cash emergency forces early liquidation of this position.
+   * Defaults to 0 or estimated via scenario simulations.
+   */
+  earlyWithdrawalRisk?: number;
+}
+
