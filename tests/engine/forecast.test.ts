@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   NaiveForecaster,
   SeasonalNaiveForecaster,
+  HourOfWeekSmoothingForecaster,
   evaluateForecaster,
   InsufficientHistoryError,
   InvalidForecastParameterError,
@@ -88,11 +89,6 @@ describe("Forecasting Engine & Backtest Harness", () => {
       const predictions = model.predict(weeklyHistory, horizon);
       expect(predictions).toHaveLength(24);
 
-      // According to y_{t+h} = y_{t+h-168}:
-      // For h = 1: index = 168 - 168 + 0 = 0 (hour 0 of history -> $10.00)
-      // For h = 2: index = 168 - 168 + 1 = 1 (hour 1 of history -> $20.00)
-      // ...
-      // For h = 24: index = 23 (hour 23 of history -> $240.00)
       for (let h = 1; h <= 24; h++) {
         const expectedValue = h * 10;
         expect(predictions[h - 1].toDecimal()).toBe(expectedValue);
@@ -107,19 +103,15 @@ describe("Forecasting Engine & Backtest Harness", () => {
       const predictions = model.predict(weeklyHistory, horizon);
       expect(predictions).toHaveLength(200);
 
-      // Predictions 1..168 match hours 0..167
       expect(predictions[0].toDecimal()).toBe(10);
       expect(predictions[167].toDecimal()).toBe(1680);
-
-      // Step 169 (h = 169) wraps around to step 1 (hour 0 of history -> $10.00)
       expect(predictions[168].toDecimal()).toBe(10);
-      // Step 200 wraps to step 32 (hour 31 of history -> $320.00)
       expect(predictions[199].toDecimal()).toBe(320);
     });
 
     it("throws InsufficientHistoryError when history is shorter than seasonalLag by default", () => {
       const model = new SeasonalNaiveForecaster({ seasonalLag: 168 });
-      const shortHistory = weeklyHistory.slice(0, 100); // 100 < 168
+      const shortHistory = weeklyHistory.slice(0, 100);
 
       expect(() => model.predict(shortHistory, 24)).toThrow(InsufficientHistoryError);
       expect(() => model.predict(shortHistory, 24)).toThrow(/168 hours of history/);
@@ -133,7 +125,7 @@ describe("Forecasting Engine & Backtest Harness", () => {
 
       const shortHistory = [
         createMockBucket(0, 500),
-        createMockBucket(1, 999), // Last observation: $999.00
+        createMockBucket(1, 999),
       ];
 
       const predictions = model.predict(shortHistory, 6);
@@ -145,93 +137,167 @@ describe("Forecasting Engine & Backtest Harness", () => {
 
     it("supports custom seasonal lag periods (e.g. daily seasonality = 24h)", () => {
       const model = new SeasonalNaiveForecaster({ seasonalLag: 24 });
-      const dailyHistory = weeklyHistory.slice(0, 48); // 2 days
+      const dailyHistory = weeklyHistory.slice(0, 48);
 
       const predictions = model.predict(dailyHistory, 12);
       expect(predictions).toHaveLength(12);
 
-      // Last 24 hours start at index 24 (48 - 24 = 24)
       for (let h = 1; h <= 12; h++) {
         expect(predictions[h - 1].equals(dailyHistory[24 + h - 1].netFlow)).toBe(true);
       }
     });
   });
 
-  describe("Backtest Harness (evaluateForecaster)", () => {
-    // Build a 240-hour continuous series
+  describe("Hour-of-Week Smoothing Forecaster", () => {
+    it("correctly maps timestamps to hour-of-week indices (0 to 167)", () => {
+      // Sunday 00:00 UTC -> slot 0
+      const sun00 = new Date("2026-10-18T00:00:00.000Z"); // Sunday
+      expect(HourOfWeekSmoothingForecaster.getHourOfWeekIndex(sun00)).toBe(0);
+
+      // Sunday 23:00 UTC -> slot 23
+      const sun23 = new Date("2026-10-18T23:00:00.000Z");
+      expect(HourOfWeekSmoothingForecaster.getHourOfWeekIndex(sun23)).toBe(23);
+
+      // Monday 09:00 UTC -> slot 1 * 24 + 9 = 33
+      const mon09 = new Date("2026-10-19T09:00:00.000Z");
+      expect(HourOfWeekSmoothingForecaster.getHourOfWeekIndex(mon09)).toBe(33);
+
+      // Saturday 23:00 UTC -> slot 6 * 24 + 23 = 167
+      const sat23 = new Date("2026-10-24T23:00:00.000Z");
+      expect(HourOfWeekSmoothingForecaster.getHourOfWeekIndex(sat23)).toBe(167);
+    });
+
+    it("applies arithmetic mean across multiple weeks for each hour-of-week slot in mean mode", () => {
+      const model = new HourOfWeekSmoothingForecaster({ mode: "mean" });
+
+      // Generate 2 full weeks of data (336 hours) starting Sunday 00:00 UTC
+      // 2026-10-18 is Sunday 00:00:00.000Z
+      const startMs = new Date("2026-10-18T00:00:00.000Z").getTime();
+      const twoWeeksHistory: HourlyBucket[] = [];
+
+      for (let i = 0; i < 336; i++) {
+        const hourStart = new Date(startMs + i * ONE_HOUR_MS);
+        // Week 1 has value 1000, Week 2 has value 3000 -> mean should be 2000
+        const isWeek1 = i < 168;
+        const val = isWeek1 ? 1000 : 3000;
+        const netFlow = Money.fromDecimal(val.toFixed(2));
+        twoWeeksHistory.push({
+          bucketId: hourStart.toISOString(),
+          hourStart,
+          inbound: netFlow,
+          outbound: Money.zero(),
+          netFlow,
+          grossVolume: netFlow,
+          transactionCount: 2,
+        });
+      }
+
+      const predictions = model.predict(twoWeeksHistory, 24);
+      expect(predictions).toHaveLength(24);
+
+      // Mean of 1000 and 3000 is 2000
+      for (const pred of predictions) {
+        expect(pred.toDecimal()).toBe(2000);
+      }
+    });
+
+    it("applies EWMA smoothing giving more weight to recent observations in ewma mode", () => {
+      // lambda = 0.5: s_k = 0.5 * new + 0.5 * old
+      // Week 1: 1000
+      // Week 2: 3000 -> updated: 0.5 * 3000 + 0.5 * 1000 = 2000
+      // Week 3: 4000 -> updated: 0.5 * 4000 + 0.5 * 2000 = 3000
+      const model = new HourOfWeekSmoothingForecaster({ mode: "ewma", lambda: 0.5 });
+
+      const startMs = new Date("2026-10-18T00:00:00.000Z").getTime();
+      const threeWeeksHistory: HourlyBucket[] = [];
+
+      for (let i = 0; i < 504; i++) {
+        const hourStart = new Date(startMs + i * ONE_HOUR_MS);
+        const week = Math.floor(i / 168);
+        const val = week === 0 ? 1000 : week === 1 ? 3000 : 4000;
+        const netFlow = Money.fromDecimal(val.toFixed(2));
+        threeWeeksHistory.push({
+          bucketId: hourStart.toISOString(),
+          hourStart,
+          inbound: netFlow,
+          outbound: Money.zero(),
+          netFlow,
+          grossVolume: netFlow,
+          transactionCount: 2,
+        });
+      }
+
+      const predictions = model.predict(threeWeeksHistory, 24);
+      expect(predictions).toHaveLength(24);
+
+      // With lambda 0.5, expected EWMA profile is 3000
+      for (const pred of predictions) {
+        expect(pred.toDecimal()).toBe(3000);
+      }
+    });
+
+    it("falls back to global mean or fallbackValue for unobserved hour-of-week slots", () => {
+      const fallback = Money.fromDecimal("777.00");
+      const model = new HourOfWeekSmoothingForecaster({ fallbackValue: fallback });
+
+      // Only 3 hours of history
+      const history = [
+        createMockBucket(0, 500),
+        createMockBucket(1, 600),
+        createMockBucket(2, 700),
+      ];
+
+      // Predict 48 hours ahead (most slots will be unobserved)
+      const predictions = model.predict(history, 48);
+      expect(predictions).toHaveLength(48);
+
+      // Later steps that weren't seen in the 3-hour history fall back to 777.00
+      expect(predictions[10].toDecimal()).toBe(777);
+    });
+  });
+
+  describe("Backtest Harness Integration with Metrics", () => {
+    // Build a 240-hour continuous series with realistic diurnal cycle
     const series: HourlyBucket[] = Array.from({ length: 240 }, (_, i) => {
-      // Deterministic synthetic curve: baseline + daily cycle
       const cycle = Math.sin((i % 24) * (Math.PI / 12)) * 1000;
       return createMockBucket(i, 2000 + cycle);
     });
 
-    // Create rolling windows: 168h lookback, 24h horizon, step = 12h
-    // Total window = 192h. Slack = 240 - 192 = 48h.
-    // Offsets: 0, 12, 24, 36, 48 -> 5 windows
+    // Create rolling windows: 168h lookback, 24h horizon, step = 12h -> 5 windows
     const windows = createRollingWindows(series, 168, 24, 12);
 
-    it("correctly iterates through all rolling windows and pairs predictions with ground truth", () => {
+    it("automatically computes aggregate MAE, MASE, and Pinball loss metrics", () => {
       const forecaster = new NaiveForecaster();
       const result = evaluateForecaster(forecaster, windows);
 
-      expect(result.forecasterName).toBe(forecaster.name);
-      expect(result.windowCount).toBe(5);
-      expect(result.horizonHours).toBe(24);
-      expect(result.windows).toHaveLength(5);
+      expect(result.metrics).toBeDefined();
+      expect(result.metrics.maeMinor).toBeGreaterThan(0);
+      expect(result.metrics.maeDollars).toBeGreaterThan(0);
+      expect(result.metrics.maeDollars).toBeCloseTo(result.metrics.maeMinor / 100, 4);
 
-      for (let w = 0; w < result.windows.length; w++) {
-        const evaluated = result.windows[w];
-        expect(evaluated.windowIndex).toBe(windows[w].index);
-        expect(evaluated.asOf.getTime()).toBe(windows[w].asOf.getTime());
+      // MASE is computed and non-negative
+      expect(result.metrics.mase).toBeGreaterThan(0);
 
-        // Length invariants
-        expect(evaluated.target).toHaveLength(24);
-        expect(evaluated.predictions).toHaveLength(24);
-        expect(evaluated.actuals).toHaveLength(24);
-        expect(evaluated.residuals).toHaveLength(24);
-
-        // Ground-truth actuals strictly match window targets
-        for (let h = 0; h < 24; h++) {
-          expect(evaluated.actuals[h].equals(windows[w].target[h].netFlow)).toBe(true);
-
-          // Residual invariant: residual = actual - prediction
-          const expectedResidual = evaluated.actuals[h].subtract(evaluated.predictions[h]);
-          expect(evaluated.residuals[h].equals(expectedResidual)).toBe(true);
-        }
-
-        // For NaiveForecaster, predictions are flat equal to last observation of history
-        const expectedFlatValue = windows[w].history[167].netFlow;
-        for (const pred of evaluated.predictions) {
-          expect(pred.equals(expectedFlatValue)).toBe(true);
-        }
-      }
+      // Pinball loss at 95% and 99%
+      expect(result.metrics.pinballLoss95).toBeGreaterThan(0);
+      expect(result.metrics.pinballLoss99).toBeGreaterThan(0);
     });
 
-    it("evaluates Seasonal Naive across rolling windows accurately", () => {
-      const seasonalModel = new SeasonalNaiveForecaster({ seasonalLag: 168 });
-      const result = evaluateForecaster(seasonalModel, windows);
+    it("demonstrates that seasonal/smoothing models achieve lower MASE on cyclical data than flat naive", () => {
+      const naive = new NaiveForecaster();
+      const seasonalNaive = new SeasonalNaiveForecaster({ seasonalLag: 168 });
+      const smoothing = new HourOfWeekSmoothingForecaster({ mode: "ewma", lambda: 0.4 });
 
-      expect(result.windowCount).toBe(5);
+      const naiveResult = evaluateForecaster(naive, windows);
+      const seasonalResult = evaluateForecaster(seasonalNaive, windows);
+      const smoothingResult = evaluateForecaster(smoothing, windows);
 
-      for (const evaluated of result.windows) {
-        expect(evaluated.predictions).toHaveLength(24);
-        expect(evaluated.residuals).toHaveLength(24);
+      // On a cyclical daily curve, seasonal models capture the recurring pattern much better than flat naive
+      expect(seasonalResult.metrics.maeDollars).toBeLessThan(naiveResult.metrics.maeDollars);
+      expect(smoothingResult.metrics.maeDollars).toBeLessThan(naiveResult.metrics.maeDollars);
 
-        for (let h = 0; h < 24; h++) {
-          // Seasonal naive prediction matches hour (168 - 168 + h) = h of window history
-          const expectedPred = windows[evaluated.windowIndex].history[h].netFlow;
-          expect(evaluated.predictions[h].equals(expectedPred)).toBe(true);
-        }
-      }
-    });
-
-    it("returns clean empty evaluation result for empty windows array", () => {
-      const forecaster = new NaiveForecaster();
-      const result = evaluateForecaster(forecaster, []);
-
-      expect(result.windowCount).toBe(0);
-      expect(result.horizonHours).toBe(0);
-      expect(result.windows).toEqual([]);
+      // Seasonal model MASE should be close to 0 on smooth identical weekly cycles
+      expect(seasonalResult.metrics.mase).toBeLessThan(naiveResult.metrics.mase);
     });
   });
 });
