@@ -57,3 +57,26 @@ export function Button({
 export function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
   return <div className={cn("animate-pulse rounded-md bg-surface-2", className)} {...props} />;
 }
+
+export function Input({ className, type = "text", ...props }: React.ComponentProps<"input">) {
+  return (
+    <input
+      type={type}
+      className={cn(
+        "flex h-9 w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-sm text-foreground shadow-sm transition-colors placeholder:text-muted focus-visible:border-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export function Label({ className, ...props }: React.ComponentProps<"label">) {
+  return (
+    <label
+      className={cn("text-xs font-medium tracking-wide text-foreground", className)}
+      {...props}
+    />
+  );
+}
+
