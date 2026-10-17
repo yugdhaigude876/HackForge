@@ -11,3 +11,4 @@ export * from "./forecast";
 export * from "./metrics";
 export * from "./reserve";
 export * from "./optimizer";
+export * from "./decision";
