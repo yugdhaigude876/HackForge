@@ -1,5 +1,6 @@
 import {
   Activity,
+  BarChart3,
   Gauge,
   Layers,
   ScrollText,
@@ -19,10 +20,11 @@ export interface NavItem {
 
 export const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: Gauge },
-  { href: "/forecast", label: "Forecast", icon: TrendingUp, phase: 4 },
-  { href: "/reserve", label: "Reserve", icon: Layers, phase: 5 },
-  { href: "/optimizer", label: "Optimizer", icon: SlidersHorizontal, phase: 5 },
+  { href: "/forecast", label: "Forecast", icon: TrendingUp },
+  { href: "/reserve", label: "Reserve", icon: Layers },
+  { href: "/optimizer", label: "Optimizer", icon: SlidersHorizontal },
   { href: "/twin", label: "Digital Twin", icon: Activity },
-  { href: "/audit", label: "Audit Trail", icon: ScrollText, phase: 16 },
-  { href: "/settings", label: "Settings", icon: Settings, phase: 2 },
+  { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/audit", label: "Audit Trail", icon: ScrollText },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];

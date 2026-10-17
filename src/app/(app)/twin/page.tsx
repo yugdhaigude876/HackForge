@@ -19,6 +19,7 @@ import { Panel, EmptyState, LoadingState } from "@/components/finance/panels";
 import { Button, Badge, Card } from "@/components/ui/primitives";
 import { apiFetch } from "@/lib/api-client";
 import { useAuth } from "@/lib/firebase/auth-context";
+import { useOrgRole } from "@/hooks/use-org-role";
 import {
   TwinComparisonChart,
   type CashPointDTO,
@@ -190,7 +191,8 @@ const PRESETS = [
 export default function DigitalTwinPage() {
   const { user, isMock } = useAuth();
   const isLive = Boolean(user && !isMock);
-  const userRole = isLive ? "analyst" : "viewer";
+  const { role: serverRole } = useOrgRole();
+  const userRole = isLive ? (serverRole ?? "analyst") : "viewer";
   const canRun = isLive && userRole !== "viewer";
 
   // Scenario Builder state

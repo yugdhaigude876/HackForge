@@ -119,3 +119,49 @@ To evaluate multiple policies (`reserve-juggler`, `hold-all-cash`, `fixed-buffer
 ### 9. Honest Framing & Disclaimer
 All simulation metrics are model outputs on empirical or synthetic inputs, not a financial guarantee. Every simulation result includes a mandatory disclaimer emphasizing that reserve juggler outputs reflect probabilistic estimates under modeled assumptions.
 
+### 10. Baseline Forecasters & Comparative Evaluation Metrics (Phase 20)
+
+#### 10.1 Naive Benchmarks Evaluated on Identical Windows
+To establish whether the forecast model has genuine predictive skill, its errors are compared against two classical naive benchmarks evaluated on the **exact same** rolling-origin cutoff windows $(X_{1:t}, y_{t+1:t+H})$:
+1. **Naive (Flat Line)**:
+   $$\hat{y}_{t+h}^{\text{naive}} = y_t \quad \forall h \in \{1, \dots, H\}$$
+2. **Seasonal Naive (Weekly Cycle, $m = 168$ hours)**:
+   $$\hat{y}_{t+h}^{\text{snaive}} = y_{t + h - m \cdot \lceil h / m \rceil}$$
+   If history $T < 168$, seasonal naive falls back deterministically to 1-step flat naive.
+
+#### 10.2 Mean Absolute Scaled Error (MASE)
+$$\text{MASE} = \frac{\frac{1}{H}\sum_{h=1}^H |y_{t+h} - \hat{y}_{t+h}|}{Q}$$
+Where the in-sample seasonal scaling denominator $Q$ is:
+$$Q = \frac{1}{T - m} \sum_{t=m+1}^T |y_t - y_{t-m}|$$
+If $Q = 0$ (e.g. perfectly flat synthetic series), MASE is undefined; the engine returns `null` with explicit `reason: "In-sample scaling denominator is zero"` rather than `NaN` or `Infinity`.
+
+#### 10.3 Pinball Quantile Loss
+Evaluates accuracy at the tail quantile $\tau \in (0, 1)$ (typically $\tau = 0.95$ for reserve coverage):
+$$L_\tau(y, \hat{q}) = \begin{cases} \tau (y - \hat{q}) & \text{if } y \ge \hat{q} \\ (\tau - 1)(y - \hat{q}) & \text{if } y < \hat{q} \end{cases}$$
+At $\tau = 0.5$, Pinball Loss reduces exactly to $\frac{1}{2}\text{MAE}$.
+
+#### 10.4 Skill Score Formulation
+The relative improvement of the model over a baseline $B$ on metric $M$:
+$$\text{Skill Score} = \frac{M_{\text{baseline}} - M_{\text{model}}}{M_{\text{baseline}}}$$
+- $\text{Skill} > 0$: Model outperforms the baseline by $\text{Skill} \times 100\%$.
+- $\text{Skill} < 0$: Baseline outperforms the model.
+- If $M_{\text{baseline}} \le 0$: Undefined; returns `null` with an explicit reason.
+
+### 11. Deterministic Decision Explanations (`src/engine/explain.ts`)
+Decisions are explained using pure TypeScript deterministic derivation without LLMs or stochastic generation:
+1. **Mathematical Derivation**:
+   - $\mu = \text{meanCumulativeFlow}$
+   - $q = \text{quantile95Flow}$ (probabilistic cash need at confidence $\alpha$)
+   - $F = \text{operationalFloor}$
+   - $Z = \text{stressAddOn}$
+   - $R = \max(0, -(\mu + q)) + F + Z$
+   - $C = \text{availableCash}$
+   - $S = \max(0, C - R)$ (deployable surplus)
+2. **Status Triggering Invariants**:
+   - `UNDER_RESERVED`: Triggered when $C < R$. Zero surplus deployable.
+   - `LOW_CONFIDENCE`: Triggered when model MASE exceeds threshold or confidence $\alpha < 0.80$. Surplus deployment is halted or restricted.
+   - `HEALTHY`: $C \ge R$ and confidence requirements met.
+3. **Instrument Allocation Net Unit Value ($v_i$)**:
+   $$v_i = r_i \cdot \frac{H}{8760} - \pi_i \cdot p_i$$
+   Surplus is greedily allocated in descending order of $v_i$ up to instrument capacity $\text{cap}_i$. Non-positive $v_i$ instruments are rejected with explicit reasons.
+

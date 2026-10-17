@@ -192,7 +192,7 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
 1. **`POST /api/simulations/compare`**:
    - Minimum role: `analyst`.
    - Work cap: `trials × policies ≤ 3,000` to guarantee execution finishes well within serverless timeouts.
-   - Rate limit: Shared 10-second in-memory limiter per org.
+   - Rate limit: Shared 10-second in-memory limiter per organisation (`lastSimulationAt` map keyed by `orgId`). Note: this limiter is best-effort per serverless runtime instance. It provides basic client debouncing and burst protection within warm instances, but does not provide a hard distributed guarantee across concurrent autoscaling serverless instances.
    - Persistence: Persists one `simulations` record per policy sharing a unique `comparisonId`, plus one SHA-256 audit entry.
 2. **`GET /api/simulations/compare`**:
    - Minimum role: `viewer`.
@@ -210,9 +210,39 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
 - **Interactive Replay Scrubber**: Play/pause timer (800ms per step), step backward/forward buttons, slider, and keyboard controls (`ArrowLeft`, `ArrowRight`, `Space`) with real-time policy cash readouts and shock status badge.
 - **Archived History**: Lists recent runs with 1-click deterministic replay from stored Firestore records.
 
+## Analytics & Explainability (Phase 20)
+
+### Metrics & Baselines (`src/engine/metrics.ts`)
+- **Rolling-Origin Comparative Evaluation**: Evaluates forecaster against **Naive** (last observed net flow) and **Seasonal Naive** (same hour in previous weekly cycle, $m = 168$) on identical rolling-origin cutoffs.
+- **Mean Absolute Scaled Error (MASE)**: Scaled by in-sample one-step seasonal naive mean absolute error $Q = \frac{1}{T-m} \sum_{t=m+1}^T |y_t - y_{t-m}|$. Returns explicit reason if in-sample scale is zero.
+- **Pinball Loss**: Evaluates asymmetric quantile loss at quantile $\tau$ ($\tau \in (0, 1)$).
+- **Skill Scores**: Evaluates percentage improvement over baselines: $\text{skill} = \frac{\text{baseline} - \text{model}}{\text{baseline}}$. Positive indicates model superiority; degenerate baseline handling returns `null` with explicit reasons.
+- **Interval Coverage**: Computes fraction of actual cash flows falling within probabilistic prediction bands $[L_t, U_t]$.
+
+### Deterministic Decision Explanations (`src/engine/explain.ts`)
+- **Zero Hallucination / No LLM**: Pure TypeScript deterministic derivation converting internal pipeline state into human-auditable text and step-by-step numbers.
+- **Mathematical Derivation Steps**: Exposes step-by-step figures for expected net flow $\mu$, flow quantile $q$, operational floor $F$, stress add-on $Z$, required reserve $R$, available cash $C$, and deployable surplus $\max(0, C - R)$.
+- **Status Triggering Rules**: Documents exact inequality conditions for `UNDER_RESERVED` ($C < R$), `LOW_CONFIDENCE` (MASE or confidence threshold breach), and `HEALTHY`.
+- **Instrument Net Unit Values & Funding Reasons**: Details each instrument's net unit value $v_i = r_i \cdot \frac{H}{8760} - \pi_i \cdot p_i$, capacity limit, allocated capital, and explicit funding decision (funded to capacity, funded with remainder of surplus, or skipped due to non-positive net value).
+- Added as additive `explanationDetails` field to `GET /api/decisions/[id]`.
+
+### Analytics Endpoints
+1. **`GET /api/analytics/forecast`**:
+   - Minimum role: `viewer`.
+   - Returns latest forecast metadata, rolling backtest windows count, MASE, pinball loss, MAE, and skill scores vs Naive and Seasonal Naive baselines.
+2. **`GET /api/analytics/policies`**:
+   - Minimum role: `viewer`.
+   - Aggregates multi-policy simulation runs sharing `comparisonId`. Computes cross-run means, mins, maxes for net yield, shortfall frequency, penalties, and borrowing costs, plus head-to-head win/loss records vs `hold-all-cash`. Minor unit integer strings at API boundary.
+
+### Dedicated Application Pages
+- **`/forecast`**: Displays probabilistic liquidity forecasts with shaded 90% residual uncertainty band, backtest performance matrix vs baselines, skill score callout cards, and sampling parameters.
+- **`/reserve`**: Displays liquid reserve determination KPIs, step-by-step mathematical derivation breakdown, balance breakdown waterfall chart, and standing regulatory caveat banner.
+- **`/optimizer`**: Displays surplus budget KPIs, instrument allocation matrix with net unit values $v_i$ and deterministic funding reasons, allocation donut chart, and greedy allocation principles card.
+- **`/analytics`**: Comprehensive analytical hub featuring forecast model vs baseline accuracy cards, multi-policy simulation aggregates table, and decision audit history with plain-language explanation inspector drawer.
+
 ## Deployment
 Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
 ## Current Implementation Status
-Phases 1 through 19 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision, simulate, multi-policy comparison), Route Handlers (`/api/engine/*`, `/api/simulations/*`, `/api/simulations/compare/*`, `/api/instruments`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), full dashboard wiring, stress scenario simulator, and the Digital Twin page (`/twin`) with scenario builder presets, side-by-side policy comparison, and keyboard-accessible replay scrubber. Verified with 317 Vitest tests, lint, tsc, and production build.
+Phases 1 through 20 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision, simulate, multi-policy comparison, metrics, deterministic explanations), Route Handlers (`/api/engine/*`, `/api/simulations/*`, `/api/simulations/compare/*`, `/api/instruments`, `/api/analytics/*`, `/api/decisions/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, dual-theme system (dark + soft off-white), full dashboard wiring, stress scenario simulator, Digital Twin page (`/twin`), and dedicated pages for Forecast (`/forecast`), Reserve (`/reserve`), Optimizer (`/optimizer`), and Analytics (`/analytics`). Verified with 346 Vitest tests, ESLint, tsc, and Next.js 16 production build.
 

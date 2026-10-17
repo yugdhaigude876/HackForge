@@ -220,7 +220,30 @@ describe("Policy Comparison API Routes (/api/simulations/compare)", () => {
       expect(json.error.message).toContain("Run the engine on the dashboard first so a cash baseline exists");
     });
 
-    it("succeeds when source is synthetic with explicit startingCash", async () => {
+    it("returns 400 VALIDATION_ERROR if source is synthetic but operationalFloor is missing", async () => {
+      vi.spyOn(decisionsRepo, "list").mockResolvedValue([]);
+
+      const req = createRequest("http://localhost:3000/api/simulations/compare", {
+        method: "POST",
+        token: "valid-analyst-token",
+        orgId: "org_treasury",
+        body: {
+          scenario: validScenario,
+          source: "synthetic",
+          startingCash: "4000000000",
+          trials: 20,
+        },
+      });
+
+      const res = await runCompareHandler(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.ok).toBe(false);
+      expect(json.error.code).toBe("VALIDATION_ERROR");
+      expect(json.error.message).toContain("startingCash and operationalFloor");
+    });
+
+    it("succeeds when source is synthetic with explicit startingCash and operationalFloor", async () => {
       vi.spyOn(decisionsRepo, "list").mockResolvedValue([]);
       vi.spyOn(simulationsRepo, "create").mockResolvedValue({
         id: "sim_synth",
@@ -243,6 +266,7 @@ describe("Policy Comparison API Routes (/api/simulations/compare)", () => {
           scenario: validScenario,
           source: "synthetic",
           startingCash: "4000000000",
+          operationalFloor: "200000000",
           trials: 20,
         },
       });

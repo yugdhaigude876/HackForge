@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
 import { decisionsRepo } from "@/server/repositories/decisions";
+import { instrumentsRepo } from "@/server/repositories/instruments";
+import { explainDecision } from "@/engine/explain";
 import { validateId, RepositoryError } from "@/server/repositories/common";
 import type { OrgAuthContext } from "@/server/auth";
 
@@ -63,6 +65,32 @@ export const GET = withAuth<RouteContext>(
         );
       }
 
+      // Enrich with deterministic plain-language structured explanation
+      let knownInstruments: Array<{
+        id: string;
+        name: string;
+        apy?: number;
+        settlementLagHours?: number;
+        withdrawalPenalty?: number;
+        capacityMinor?: string;
+        earlyWithdrawalRisk?: number;
+      }> = [];
+      try {
+        const storedInstruments = await instrumentsRepo.list(authContext.orgId);
+        knownInstruments = storedInstruments.map((inst) => ({
+          id: inst.id,
+          name: inst.name,
+          annualRateBps: inst.annualRateBps,
+          settlementLagHours: inst.settlementLagHours,
+          penaltyBps: inst.penaltyBps,
+          capacityMinor: inst.capacityMinor,
+        }));
+      } catch {
+        // Fall back to stored allocation metadata if instruments repo fails
+      }
+
+      const structuredExplanation = explainDecision(decision, knownInstruments);
+
       const safeDecision = {
         id: decision.id,
         orgId: decision.orgId,
@@ -70,13 +98,21 @@ export const GET = withAuth<RouteContext>(
         confidence: decision.confidence,
         reserve: decision.reserveMinor,
         surplus: decision.surplusMinor,
+        availableCash: decision.availableCashMinor,
+        operationalFloor: decision.operationalFloorMinor,
+        expectedCumulativeFlow: decision.expectedCumulativeFlowMinor,
+        worstCaseResidualShortfall: decision.worstCaseResidualShortfallMinor,
         allocations: (decision.allocations ?? []).map((a) => ({
           instrumentId: a.instrumentId,
           amount: a.amountMinor,
+          name: a.name,
+          annualRateBps: a.annualRateBps,
+          penaltyBps: a.penaltyBps,
         })),
         status: decision.status,
         expectedNetYield: decision.expectedNetYieldMinor,
         explanation: decision.explanation,
+        explanationDetails: structuredExplanation,
         createdAt:
           decision.createdAt instanceof Date
             ? decision.createdAt.toISOString()

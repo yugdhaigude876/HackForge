@@ -301,7 +301,31 @@ describe("Stress Simulations API Routes (Phase 18)", () => {
       expect(json.error.message).toContain("Run the engine on the dashboard first so a cash baseline exists");
     });
 
-    it("succeeds without stored decision when source is synthetic and startingCash is explicitly provided", async () => {
+    it("returns 400 VALIDATION_ERROR if source is synthetic but operationalFloor is missing when no stored decision exists", async () => {
+      vi.spyOn(instrumentsRepo, "list").mockResolvedValue([mockInstrument]);
+      vi.spyOn(decisionsRepo, "list").mockResolvedValue([]);
+
+      const req = createRequest("http://localhost:3000/api/simulations", {
+        method: "POST",
+        token: "valid-analyst-token",
+        orgId: "org_treasury",
+        body: {
+          scenario: validScenario,
+          source: "synthetic",
+          startingCash: "5000000000",
+          // operationalFloor missing
+        },
+      });
+
+      const res = await runSimulationHandler(req);
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.ok).toBe(false);
+      expect(json.error.code).toBe("VALIDATION_ERROR");
+      expect(json.error.message).toContain("Run the engine on the dashboard first");
+    });
+
+    it("succeeds without stored decision when source is synthetic and startingCash and operationalFloor are explicitly provided", async () => {
       vi.spyOn(instrumentsRepo, "list").mockResolvedValue([mockInstrument]);
       vi.spyOn(decisionsRepo, "list").mockResolvedValue([]);
       vi.spyOn(simulationsRepo, "create").mockResolvedValue({
@@ -325,6 +349,7 @@ describe("Stress Simulations API Routes (Phase 18)", () => {
           scenario: validScenario,
           source: "synthetic",
           startingCash: "5000000000",
+          operationalFloor: "200000000",
         },
       });
 

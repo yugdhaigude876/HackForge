@@ -6,6 +6,7 @@ import DigitalTwinPage from "@/app/(app)/twin/page";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import * as apiClientModule from "@/lib/api-client";
 import * as authContextModule from "@/lib/firebase/auth-context";
+import type { AuthUser } from "@/lib/firebase/types";
 
 // Mock Recharts ResponsiveContainer to avoid size computation issues in JSDOM
 vi.mock("recharts", async () => {
@@ -343,15 +344,13 @@ describe("Digital Twin Page (/twin)", () => {
   });
 
   it("hides run comparison action for viewer role and displays viewer notice", async () => {
-    // In our component logic, when user is not live (or viewer), canRun is false.
-    // Let's test viewer user role
     vi.spyOn(authContextModule, "useAuth").mockReturnValue({
-      user: null,
+      user: { uid: "test-viewer", email: "viewer@bank.com", displayName: "Viewer", isAnonymous: false } as AuthUser,
       loading: false,
       isMock: false,
       isUnconfigured: false,
       error: null,
-      getIdToken: vi.fn().mockResolvedValue(null),
+      getIdToken: vi.fn().mockResolvedValue("mock-viewer-token"),
       signInWithEmail: vi.fn(),
       signUpWithEmail: vi.fn(),
       signInWithGoogle: vi.fn(),
@@ -360,12 +359,29 @@ describe("Digital Twin Page (/twin)", () => {
       clearError: vi.fn(),
     });
 
+    vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return {
+          ok: true,
+          status: 200,
+          data: { userRole: "viewer", decision: null, forecast: null, actuals: [] },
+        };
+      }
+      return { ok: true, status: 200, data: { instruments: [], comparisons: [] } };
+    });
+
     render(
       <ThemeProvider>
         <DigitalTwinPage />
       </ThemeProvider>
     );
 
-    expect(screen.queryByTestId("run-comparison-btn")).toBeNull();
+    // Wait for role resolution
+    await waitFor(() => {
+      expect(screen.queryByTestId("run-comparison-btn")).toBeNull();
+      expect(
+        screen.getByText(/You have Viewer permissions/i)
+      ).toBeDefined();
+    });
   });
 });

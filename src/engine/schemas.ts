@@ -343,7 +343,10 @@ export const SimulationRequestSchema = z.object({
   /** Explicit starting cash minor units string when running synthetic baseline without stored decision */
   startingCash: z.string().regex(/^\d+$/).optional(),
 
-  /** Source tag ('synthetic' allows startingCash fallback without stored decision) */
+  /** Explicit operational floor minor units string when running synthetic baseline without stored decision */
+  operationalFloor: z.string().regex(/^\d+$/).optional(),
+
+  /** Source tag ('synthetic' allows startingCash and operationalFloor fallback without stored decision) */
   source: z.enum(["synthetic", "import", "live"]).optional(),
 });
 
@@ -384,7 +387,10 @@ export const PolicyComparisonRequestSchema = z.object({
   /** Explicit starting cash minor units string when running synthetic baseline without stored decision */
   startingCash: z.string().regex(/^\d+$/).optional(),
 
-  /** Source tag ('synthetic' allows startingCash fallback without stored decision) */
+  /** Explicit operational floor minor units string when running synthetic baseline without stored decision */
+  operationalFloor: z.string().regex(/^\d+$/).optional(),
+
+  /** Source tag ('synthetic' allows startingCash and operationalFloor fallback without stored decision) */
   source: z.enum(["synthetic", "import", "live"]).optional(),
 });
 

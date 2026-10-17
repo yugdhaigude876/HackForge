@@ -148,3 +148,361 @@ export function calculatePinballLoss(
 
   return { lossMinor, lossDollars };
 }
+
+export interface SkillScoreResult {
+  /**
+   * Skill score: (baselineScore - modelScore) / baselineScore
+   * Positive (> 0): model outperforms baseline.
+   * Zero (0): model performs identically to baseline.
+   * Negative (< 0): model performs worse than baseline.
+   * null: degenerate evaluation (zero baseline score, missing metric, etc.)
+   */
+  skill: number | null;
+  /** True if skill > 0 (model strictly beats baseline) */
+  isBetter: boolean;
+  /** Explanatory note if skill is null or at boundary */
+  reason?: string;
+}
+
+/**
+ * Computes the relative forecast skill score for an error metric (where lower is better):
+ * Skill = (baselineScore - modelScore) / baselineScore
+ *
+ * Degenerate cases:
+ * - If baselineScore <= 0: returns null with reason (division by zero / zero error baseline).
+ * - If modelScore or baselineScore is NaN / non-finite: returns null with reason.
+ */
+export function calculateSkillScore(
+  modelScore: number | null | undefined,
+  baselineScore: number | null | undefined
+): SkillScoreResult {
+  if (
+    modelScore === null ||
+    modelScore === undefined ||
+    baselineScore === null ||
+    baselineScore === undefined ||
+    !Number.isFinite(modelScore) ||
+    !Number.isFinite(baselineScore)
+  ) {
+    return { skill: null, isBetter: false, reason: "Non-finite or missing metric score" };
+  }
+
+  if (baselineScore <= 0) {
+    return {
+      skill: null,
+      isBetter: false,
+      reason: "Baseline score is non-positive; skill score undefined",
+    };
+  }
+
+  const skill = (baselineScore - modelScore) / baselineScore;
+  if (!Number.isFinite(skill)) {
+    return { skill: null, isBetter: false, reason: "Computed skill score is not finite" };
+  }
+
+  return {
+    skill,
+    isBetter: skill > 0,
+  };
+}
+
+export interface IntervalCoverageResult {
+  /** Fraction of actuals that fell within [lowerBounds, upperBounds] in [0, 1] */
+  coverageRate: number | null;
+  /** Count of actuals inside the prediction interval */
+  inBandCount: number;
+  /** Total number of observations evaluated */
+  totalCount: number;
+  /** Reason when evaluation is degenerate */
+  reason?: string;
+}
+
+/**
+ * Evaluates empirical coverage rate of a probabilistic residual interval band:
+ * Coverage = Count(lower <= actual <= upper) / totalCount
+ *
+ * Degenerate cases:
+ * - If series is empty: returns null coverage with reason.
+ * - If lengths mismatch: returns null coverage with reason.
+ */
+export function calculateIntervalCoverage(
+  actuals: readonly Money[],
+  lowerBounds: readonly Money[],
+  upperBounds: readonly Money[]
+): IntervalCoverageResult {
+  if (actuals.length === 0) {
+    return {
+      coverageRate: null,
+      inBandCount: 0,
+      totalCount: 0,
+      reason: "Empty actuals series provided",
+    };
+  }
+  if (actuals.length !== lowerBounds.length || actuals.length !== upperBounds.length) {
+    return {
+      coverageRate: null,
+      inBandCount: 0,
+      totalCount: actuals.length,
+      reason: `Mismatched lengths: actuals (${actuals.length}), lowerBounds (${lowerBounds.length}), upperBounds (${upperBounds.length})`,
+    };
+  }
+
+  let inBandCount = 0;
+  for (let i = 0; i < actuals.length; i++) {
+    const act = actuals[i].amountMinor;
+    const low = lowerBounds[i].amountMinor;
+    const high = upperBounds[i].amountMinor;
+    if (act >= low && act <= high) {
+      inBandCount++;
+    }
+  }
+
+  return {
+    coverageRate: inBandCount / actuals.length,
+    inBandCount,
+    totalCount: actuals.length,
+  };
+}
+
+export interface ForecasterMetricSet {
+  name: string;
+  maeMinor: number | null;
+  maeDollars: number | null;
+  mase: number | null;
+  pinballLoss: number | null;
+  reason?: string;
+}
+
+export interface ComparativeEvaluationResult {
+  windowCount: number;
+  horizonHours: number;
+  tau: number;
+  model: ForecasterMetricSet;
+  naive: ForecasterMetricSet;
+  seasonalNaive: ForecasterMetricSet;
+  skillScores: {
+    vsNaive: {
+      mase: SkillScoreResult;
+      pinball: SkillScoreResult;
+      mae: SkillScoreResult;
+    };
+    vsSeasonalNaive: {
+      mase: SkillScoreResult;
+      pinball: SkillScoreResult;
+      mae: SkillScoreResult;
+    };
+  };
+  intervalCoverage?: IntervalCoverageResult;
+  reason?: string;
+}
+
+export interface RollingWindowInput {
+  index: number;
+  asOf: Date;
+  history: readonly HourlyBucket[];
+  target: readonly HourlyBucket[];
+}
+
+export interface ForecasterInput {
+  name: string;
+  predict(history: readonly HourlyBucket[], horizonHours: number): Money[];
+}
+
+/**
+ * Predicts using 1-step Naive Benchmark (last observed value repeated).
+ */
+export function predictNaive(history: readonly HourlyBucket[], horizonHours: number): Money[] {
+  if (history.length === 0) {
+    throw new Error("Naive forecaster requires at least 1 historical observation.");
+  }
+  const lastObserved = history[history.length - 1].netFlow;
+  return Array.from({ length: horizonHours }, () => lastObserved);
+}
+
+/**
+ * Predicts using Seasonal Naive Benchmark (168h weekly cycle with fallback to 1-step naive).
+ */
+export function predictSeasonalNaive(
+  history: readonly HourlyBucket[],
+  horizonHours: number,
+  seasonalLag = 168
+): Money[] {
+  if (history.length === 0) {
+    throw new Error("Seasonal naive forecaster requires history observations.");
+  }
+  const T = history.length;
+  if (T < seasonalLag) {
+    // Fallback to flat naive
+    const lastValue = history[T - 1].netFlow;
+    return Array.from({ length: horizonHours }, () => lastValue);
+  }
+
+  const predictions: Money[] = [];
+  for (let h = 1; h <= horizonHours; h++) {
+    const cycleOffset = (h - 1) % seasonalLag;
+    const indexInHistory = T - seasonalLag + cycleOffset;
+    predictions.push(history[indexInHistory].netFlow);
+  }
+  return predictions;
+}
+
+/**
+ * Evaluates the chosen forecaster and both naive benchmarks on the EXACT SAME rolling-origin windows.
+ * Computes MAE, MASE (scaled by in-sample seasonal-naive error), Pinball loss at reserve quantile tau,
+ * and skill scores against each baseline.
+ *
+ * Degenerate cases (e.g. zero scale, zero windows) return null fields with explicit reasons, never NaN.
+ */
+export function evaluateModelAndBaselinesOnWindows(
+  modelForecaster: ForecasterInput,
+  windows: readonly RollingWindowInput[],
+  options: {
+    tau?: number;
+    seasonalLag?: number;
+    residualLowerBounds?: readonly Money[];
+    residualUpperBounds?: readonly Money[];
+  } = {}
+): ComparativeEvaluationResult {
+  const tau = options.tau ?? 0.95;
+  const seasonalLag = options.seasonalLag ?? 168;
+
+  if (windows.length === 0) {
+    const emptyMetrics = (name: string): ForecasterMetricSet => ({
+      name,
+      maeMinor: null,
+      maeDollars: null,
+      mase: null,
+      pinballLoss: null,
+      reason: "No rolling-origin evaluation windows provided",
+    });
+
+    const nullSkill: SkillScoreResult = {
+      skill: null,
+      isBetter: false,
+      reason: "No evaluation windows",
+    };
+
+    return {
+      windowCount: 0,
+      horizonHours: 0,
+      tau,
+      model: emptyMetrics(modelForecaster.name),
+      naive: emptyMetrics("Naive (Flat Line)"),
+      seasonalNaive: emptyMetrics("Seasonal Naive (Same Hour Last Week)"),
+      skillScores: {
+        vsNaive: { mase: nullSkill, pinball: nullSkill, mae: nullSkill },
+        vsSeasonalNaive: { mase: nullSkill, pinball: nullSkill, mae: nullSkill },
+      },
+      reason: "Too few windows: history is shorter than backtest requirements",
+    };
+  }
+
+  const horizonHours = windows[0].target.length;
+  const allActuals: Money[] = [];
+  const modelPreds: Money[] = [];
+  const naivePreds: Money[] = [];
+  const seasonalNaivePreds: Money[] = [];
+
+  let sumInSampleScale = 0;
+
+  for (const win of windows) {
+    const actuals = win.target.map((t) => t.netFlow);
+    const mPred = modelForecaster.predict(win.history, actuals.length);
+    const nPred = predictNaive(win.history, actuals.length);
+    const snPred = predictSeasonalNaive(win.history, actuals.length, seasonalLag);
+
+    for (let i = 0; i < actuals.length; i++) {
+      allActuals.push(actuals[i]);
+      modelPreds.push(mPred[i]);
+      naivePreds.push(nPred[i]);
+      seasonalNaivePreds.push(snPred[i]);
+    }
+
+    sumInSampleScale += calculateInSampleScaleMAE(win.history, seasonalLag);
+  }
+
+  const avgInSampleScale = sumInSampleScale / windows.length;
+  const hasZeroScale = avgInSampleScale <= 0;
+
+  // Model metrics
+  const modelMae = calculateMAE(allActuals, modelPreds);
+  const modelMase = hasZeroScale ? null : calculateMASE(allActuals, modelPreds, avgInSampleScale);
+  const modelPinball = calculatePinballLoss(allActuals, modelPreds, tau);
+
+  // Naive metrics
+  const naiveMae = calculateMAE(allActuals, naivePreds);
+  const naiveMase = hasZeroScale ? null : calculateMASE(allActuals, naivePreds, avgInSampleScale);
+  const naivePinball = calculatePinballLoss(allActuals, naivePreds, tau);
+
+  // Seasonal Naive metrics
+  const snMae = calculateMAE(allActuals, seasonalNaivePreds);
+  const snMase = hasZeroScale ? null : calculateMASE(allActuals, seasonalNaivePreds, avgInSampleScale);
+  const snPinball = calculatePinballLoss(allActuals, seasonalNaivePreds, tau);
+
+  const modelMetrics: ForecasterMetricSet = {
+    name: modelForecaster.name,
+    maeMinor: modelMae.maeMinor,
+    maeDollars: modelMae.maeDollars,
+    mase: modelMase,
+    pinballLoss: modelPinball.lossDollars,
+    ...(hasZeroScale ? { reason: "In-sample scaling denominator is zero" } : {}),
+  };
+
+  const naiveMetrics: ForecasterMetricSet = {
+    name: "Naive (Flat Line)",
+    maeMinor: naiveMae.maeMinor,
+    maeDollars: naiveMae.maeDollars,
+    mase: naiveMase,
+    pinballLoss: naivePinball.lossDollars,
+    ...(hasZeroScale ? { reason: "In-sample scaling denominator is zero" } : {}),
+  };
+
+  const snMetrics: ForecasterMetricSet = {
+    name: "Seasonal Naive (Same Hour Last Week)",
+    maeMinor: snMae.maeMinor,
+    maeDollars: snMae.maeDollars,
+    mase: snMase,
+    pinballLoss: snPinball.lossDollars,
+    ...(hasZeroScale ? { reason: "In-sample scaling denominator is zero" } : {}),
+  };
+
+  // Skill scores: (baseline - model) / baseline
+  const vsNaiveMase = calculateSkillScore(modelMase, naiveMase);
+  const vsNaivePinball = calculateSkillScore(modelPinball.lossDollars, naivePinball.lossDollars);
+  const vsNaiveMae = calculateSkillScore(modelMae.maeDollars, naiveMae.maeDollars);
+
+  const vsSnMase = calculateSkillScore(modelMase, snMase);
+  const vsSnPinball = calculateSkillScore(modelPinball.lossDollars, snPinball.lossDollars);
+  const vsSnMae = calculateSkillScore(modelMae.maeDollars, snMae.maeDollars);
+
+  let intervalCoverage: IntervalCoverageResult | undefined;
+  if (options.residualLowerBounds && options.residualUpperBounds) {
+    intervalCoverage = calculateIntervalCoverage(
+      allActuals,
+      options.residualLowerBounds,
+      options.residualUpperBounds
+    );
+  }
+
+  return {
+    windowCount: windows.length,
+    horizonHours,
+    tau,
+    model: modelMetrics,
+    naive: naiveMetrics,
+    seasonalNaive: snMetrics,
+    skillScores: {
+      vsNaive: {
+        mase: vsNaiveMase,
+        pinball: vsNaivePinball,
+        mae: vsNaiveMae,
+      },
+      vsSeasonalNaive: {
+        mase: vsSnMase,
+        pinball: vsSnPinball,
+        mae: vsSnMae,
+      },
+    },
+    ...(intervalCoverage ? { intervalCoverage } : {}),
+  };
+}

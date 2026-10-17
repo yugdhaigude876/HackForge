@@ -102,6 +102,8 @@ export const POST = withAuth(
     }
 
     // 2. Rate Limiting / Debouncing (10s per org)
+    // NOTE: This limiter is in-memory and operates on a best-effort basis per serverless container.
+    // It is not a distributed hard guarantee across multiple serverless instances.
     const lastRun = orgLastSimTime.get(orgId);
     const now = Date.now();
     if (lastRun && now - lastRun < MIN_SIM_INTERVAL_MS) {
@@ -172,12 +174,15 @@ export const POST = withAuth(
 
     // Load latest decision to obtain cash baseline and existing holdings
     let startingCash: Money | null = null;
-    let operationalFloor = Money.fromMinor(2_000_000_00n, "USD");
+    let operationalFloor: Money | null = null;
     const currentHoldings: AllocatedHolding[] = [];
     let isSyntheticSource = inputData.source === "synthetic";
 
     if (isSyntheticSource && inputData.startingCash) {
       startingCash = Money.fromMinor(BigInt(inputData.startingCash), "USD");
+    }
+    if (isSyntheticSource && inputData.operationalFloor) {
+      operationalFloor = Money.fromMinor(BigInt(inputData.operationalFloor), "USD");
     }
 
     try {
@@ -187,7 +192,7 @@ export const POST = withAuth(
         if (!startingCash && dec.availableCashMinor) {
           startingCash = Money.fromMinor(dec.availableCashMinor, "USD");
         }
-        if (dec.operationalFloorMinor) {
+        if (!operationalFloor && dec.operationalFloorMinor) {
           operationalFloor = Money.fromMinor(dec.operationalFloorMinor, "USD");
         }
         if (dec.source === "synthetic") {
@@ -209,11 +214,11 @@ export const POST = withAuth(
       console.warn("[simulationsRoute] Error fetching latest decision:", err);
     }
 
-    if (!startingCash) {
+    if (!startingCash || !operationalFloor) {
       return createErrorResponse(
         400,
         "VALIDATION_ERROR",
-        "Run the engine on the dashboard first so a cash baseline exists"
+        "Run the engine on the dashboard first so a cash baseline exists, or provide explicit source: 'synthetic' with startingCash and operationalFloor."
       );
     }
 

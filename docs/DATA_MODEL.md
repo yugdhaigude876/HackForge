@@ -35,3 +35,100 @@ The following composite indexes are configured in `firestore.indexes.json` to ba
 4. `decisions`: `createdAt DESC` (chronological decision logs).
 5. `forecasts`: `createdAt DESC` (chronological forecast runs).
 6. `audit`: `ts DESC` (chronological audit history).
+
+## Domain DTOs & API Contracts (Phase 20)
+
+### `StructuredDecisionExplanation` (`src/engine/explain.ts`)
+Additive payload returned on `GET /api/decisions/[id]` under field `explanationDetails`:
+```typescript
+interface StructuredDecisionExplanation {
+  summary: string;
+  status: "HEALTHY" | "UNDER_RESERVED" | "LOW_CONFIDENCE";
+  statusTriggerRule: string;
+  steps: Array<{
+    step: number;
+    label: string;
+    symbol: string;
+    recorded: boolean;
+    valueMinor: string | null;
+    valueFormatted: string;
+    description: string;
+  }>;
+  instruments: Array<{
+    instrumentId: string;
+    name: string;
+    annualRateBps: number | null;
+    annualRateFormatted: string;
+    settlementLagHours: number | null;
+    penaltyBps: number | null;
+    penaltyFormatted: string;
+    piEstimate: number | null;
+    piFormatted: string;
+    netUnitValue: number | null;
+    netUnitValueFormatted: string;
+    allocatedMinor: string;
+    allocatedFormatted: string;
+    capacityMinor: string | null;
+    capacityFormatted: string;
+    fundingReason: string;
+    isFunded: boolean;
+  }>;
+}
+```
+
+### `GET /api/analytics/forecast` Contract
+```typescript
+interface ForecastAnalyticsResponse {
+  ok: true;
+  data: {
+    forecastId: string | null;
+    source: "synthetic" | "production" | "live" | null;
+    asOf: string;
+    seed: string | number | null;
+    method: string;
+    windowCount: number;
+    evaluation: {
+      windowCount: number;
+      horizonHours: number;
+      tau: number;
+      model: { name: string; mase: number | null; pinballLoss: number | null; maeDollars: number | null; reason?: string };
+      naive: { name: string; mase: number | null; pinballLoss: number | null; maeDollars: number | null; reason?: string };
+      seasonalNaive: { name: string; mase: number | null; pinballLoss: number | null; maeDollars: number | null; reason?: string };
+      skillScores: {
+        vsNaive: { mase: SkillScore; pinball: SkillScore; mae: SkillScore };
+        vsSeasonalNaive: { mase: SkillScore; pinball: SkillScore; mae: SkillScore };
+      };
+      intervalCoverage?: { coverageRate: number | null; inBandCount: number; totalCount: number };
+    };
+    residualQuantiles: Record<string, number> | null;
+  };
+}
+```
+
+### `GET /api/analytics/policies` Contract
+```typescript
+interface PoliciesAnalyticsResponse {
+  ok: true;
+  data: {
+    totalComparisonsCounted: number;
+    totalSimulationsAnalyzed: number;
+    policies: Array<{
+      policy: string;
+      comparisonsCounted: number;
+      trialsTotal: number;
+      uniqueSeeds: string[];
+      netYield: { meanMinor: string; minMinor: string; maxMinor: string };
+      shortfallFrequency: { mean: number; min: number; max: number };
+      penalties: { meanMinor: string; minMinor: string; maxMinor: string };
+      borrowingCost: { meanMinor: string; minMinor: string; maxMinor: string };
+      headToHeadVsHoldAllCash: {
+        comparisonsCounted: number;
+        netYieldWins: number;
+        netYieldTies: number;
+        shortfallWins: number;
+        shortfallTies: number;
+      } | null;
+    }>;
+  };
+}
+```
