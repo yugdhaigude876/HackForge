@@ -203,9 +203,23 @@ export const POST = withAuth(
 
           return {
             instrumentId: a.instrument.id,
+            name: a.instrument.name,
             amount: amtMinor.toString(),
+            annualRateBps: Math.round(a.instrument.apy > 1 ? a.instrument.apy : a.instrument.apy * 10000),
+            settlementLagHours: a.instrument.settlementLagHours ?? 0,
+            penaltyBps: Math.round(
+              a.instrument.withdrawalPenalty > 1
+                ? a.instrument.withdrawalPenalty
+                : a.instrument.withdrawalPenalty * 10000
+            ),
+            capacity: a.instrument.capacity.amountMinor.toString(),
           };
         });
+
+        const deployedTotalMinor = (context.currentHoldings ?? []).reduce(
+          (sum, h) => sum + h.currentAmount.amountMinor,
+          0n
+        );
 
         const savedDecision = await decisionsRepo.create(
           authContext.orgId,
@@ -214,6 +228,17 @@ export const POST = withAuth(
             confidence: 1 - alpha,
             reserve: decision.requiredReserve.amountMinor.toString(),
             surplus: decision.deployableSurplus.amountMinor.toString(),
+            availableCash: context.availableCash.amountMinor.toString(),
+            deployedTotal: deployedTotalMinor.toString(),
+            operationalFloor: context.operationalFloor.amountMinor.toString(),
+            horizonHours: context.horizonHours ?? 24,
+            alpha,
+            expectedCumulativeFlow: context.expectedCumulativeFlow.amountMinor.toString(),
+            worstCaseResidualShortfall: context.worstCaseResidualShortfall.amountMinor.toString(),
+            backtest: {
+              mase: context.mase,
+              sampleSize: context.sampleSize,
+            },
             allocations: mappedAllocations,
             status: decision.status,
             expectedNetYield: totalExpectedYieldMinor.toString(),

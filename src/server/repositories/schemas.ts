@@ -91,6 +91,8 @@ export const ForecastDocSchema = z.object({
     z.object({
       ts: z.unknown(),
       meanMinor: z.string().regex(/^-?\d+$/, "meanMinor must be a decimal integer string"),
+      bandLowerMinor: z.string().regex(/^-?\d+$/, "bandLowerMinor must be a decimal integer string").optional(),
+      bandUpperMinor: z.string().regex(/^-?\d+$/, "bandUpperMinor must be a decimal integer string").optional(),
     })
   ),
   residualQuantiles: z.record(z.string(), z.number()),
@@ -98,7 +100,9 @@ export const ForecastDocSchema = z.object({
     mase: z.number(),
     pinball: z.number(),
     skillVsBaseline: z.number().optional(),
+    sampleSize: z.number().optional(),
   }),
+  source: z.enum(["synthetic", "import", "live"]).optional(),
   createdAt: z.unknown(),
   createdBy: z.string().min(1),
 });
@@ -110,15 +114,34 @@ export const DecisionDocSchema = z.object({
   confidence: z.number(),
   reserveMinor: z.string().regex(/^-?\d+$/, "reserveMinor must be a decimal integer string"),
   surplusMinor: z.string().regex(/^-?\d+$/, "surplusMinor must be a decimal integer string"),
+  availableCashMinor: z.string().regex(/^-?\d+$/, "availableCashMinor must be a decimal integer string").optional(),
+  deployedTotalMinor: z.string().regex(/^-?\d+$/, "deployedTotalMinor must be a decimal integer string").optional(),
+  operationalFloorMinor: z.string().regex(/^-?\d+$/, "operationalFloorMinor must be a decimal integer string").optional(),
+  horizonHours: z.number().int().positive().optional(),
+  alpha: z.number().optional(),
+  expectedCumulativeFlowMinor: z.string().regex(/^-?\d+$/, "expectedCumulativeFlowMinor must be a decimal integer string").optional(),
+  worstCaseResidualShortfallMinor: z.string().regex(/^-?\d+$/, "worstCaseResidualShortfallMinor must be a decimal integer string").optional(),
+  backtest: z
+    .object({
+      mase: z.number(),
+      sampleSize: z.number(),
+    })
+    .optional(),
   allocations: z.array(
     z.object({
       instrumentId: z.string().min(1),
+      name: z.string().optional(),
       amountMinor: z.string().regex(/^-?\d+$/, "amountMinor must be a decimal integer string"),
+      annualRateBps: z.number().int().nonnegative().optional(),
+      settlementLagHours: z.number().int().nonnegative().optional(),
+      penaltyBps: z.number().int().nonnegative().optional(),
+      capacityMinor: z.string().regex(/^-?\d+$/, "capacityMinor must be a decimal integer string").optional(),
     })
   ),
   status: z.string().min(1),
   expectedNetYieldMinor: z.string().regex(/^-?\d+$/, "expectedNetYieldMinor must be a decimal integer string"),
   explanation: z.string(),
+  source: z.enum(["synthetic", "import", "live"]).optional(),
   createdAt: z.unknown(),
   createdBy: z.string().min(1),
 });

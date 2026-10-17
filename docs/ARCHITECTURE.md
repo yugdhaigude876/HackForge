@@ -121,8 +121,34 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
 - **Light Theme**: Soft warm off-white background (`#f3f1ec`), surface (`#faf9f6`), secondary surface (`#efece5`), soft borders (`#ded9cd`), deep navy ink text (`#1d2638`), and muted text (`#667085`), meeting WCAG AA contrast without harsh contrast.
 - **Chart Theming**: Recharts SVG props consume dynamic theme tokens via `useChartTheme()`, providing responsive stroke, fill, and tooltip contrast in both themes.
 
+## Dashboard Integration & Run Contract (Phase 17)
+
+### Summary & Run Endpoints
+1. **`GET /api/dashboard/summary`**:
+   - Minimum role: `viewer` (authenticated via `withAuth`).
+   - Retrieves latest persisted `decision` and `forecast` for the authenticated organisation in a single typed envelope `{ ok: true, data: DashboardSummaryPayload }`.
+   - Returns `{ forecast: null, decision: null, actuals: [] }` when no runs have been executed yet (not an HTTP error).
+   - Exposes `userRole` (`admin` | `analyst` | `viewer`) to enable role-based UI capabilities on the client.
+2. **`POST /api/dashboard/run`**:
+   - Minimum role: `analyst` (viewers receive 403 Forbidden).
+   - Executes end-to-end generate &rarr; forecast &rarr; decision pipeline using org-scoped instruments from `instrumentsRepo`.
+   - If no instruments are configured in Firestore for the org, returns a 400 `VALIDATION_ERROR` requiring instruments to be configured rather than using hidden fallback defaults.
+   - Enforces a 10-second per-org debouncing / rate limit, returning HTTP 429 with `{ error: { code: "RATE_LIMITED", message: "...", details: { retryAfterSeconds: 10 } } }` and standard `Retry-After: 10` header.
+   - Persists forecast, decision, series buckets, and immutable SHA-256 audit log entries with matching identifiers.
+   - Requests with `source: "synthetic"` explicitly mark stored records with `source: "synthetic"`, allowing the UI to accurately label the origin.
+   - Returns the updated `DashboardSummaryPayload` directly to the client.
+
+### Client Data Flow (`useDashboardData` Hook)
+- **Lifecycle & State Machine**: State transitions through `"loading"` &rarr; `"ready"` | `"empty"` | `"error"` | `"unauthenticated"`.
+- **Cancellation & Unmount Safety**: Uses ref-tracking to discard in-flight responses if the component unmounts before response resolution.
+- **Strict Data Honesty**:
+  - In mock mode (`isMock`) or when unauthenticated, no network requests are dispatched. The dashboard renders labelled sample data alongside a prominent "Demonstration Mode" banner and a "Sample data" badge.
+  - Live mode renders strictly stored values from the backend engine: stored `availableCash` (avoiding false derivations like `reserve + surplus`), real quantile uncertainty bands, true backtest MASE and sample sizes, and real instrument names, APYs, penalties, and utilisation percentages calculated via exact BigInt arithmetic (`calculateAllocationPercentage`).
+  - Live and sample data are never mixed in a single view.
+- **Role-Based Controls**: The "Run engine" action is visible only to `analyst` and `admin` roles, and is hidden completely for users with `viewer` permissions.
+
 ## Deployment
 Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
 ## Current Implementation Status
-Phases 1 through 16 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision), Route Handlers (`/api/engine/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), and responsive dashboard redesign. Tested with 239 Vitest unit/integration tests and visual browser subagent verification.
+Phases 1 through 17 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision), Route Handlers (`/api/engine/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), and full dashboard wiring (`/api/dashboard/summary`, `/api/dashboard/run`, `useDashboardData`). Tested with 263 Vitest unit/integration tests and visual browser subagent verification across desktop and mobile form factors.

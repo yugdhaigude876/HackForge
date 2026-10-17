@@ -13,6 +13,8 @@ export interface ForecastInputPoint {
   hour?: string | number;
   ts?: string | Date;
   mean: number;
+  bandLower?: number;
+  bandUpper?: number;
 }
 
 export interface ResidualQuantilesConfig {
@@ -34,8 +36,27 @@ export interface ForecastBandPoint {
 }
 
 /**
+ * Calculates allocation / utilization percentage safely using BigInt arithmetic
+ * to prevent IEEE 754 precision loss on values exceeding 2^53.
+ */
+export function calculateAllocationPercentage(
+  amountMinor: string | bigint | number,
+  capacityMinor: string | bigint | number
+): number {
+  const amt = BigInt(amountMinor);
+  const cap = BigInt(capacityMinor);
+  if (cap <= 0n) return 0;
+  if (amt <= 0n) return 0;
+  if (amt >= cap) return 100;
+
+  // Scale by 10,000 for 2 decimal places precision in integer math
+  const scaledBps = (amt * 10000n) / cap;
+  return Math.min(100, Math.max(0, Number(scaledBps) / 100));
+}
+
+/**
  * Builds unified chart points combining historical actuals and future forecast
- * with confidence bands computed from residual metrics.
+ * with confidence bands computed from residual metrics or stored quantile bands.
  */
 export function buildForecastBandSeries(
   history: readonly HistoryInputPoint[],
@@ -77,7 +98,7 @@ export function buildForecastBandSeries(
   // 2. Connect horizon expansion
   const horizon = Math.max(predictions.length, 1);
 
-  // 3. Process forecast points with expanding uncertainty cone sqrt(h)
+  // 3. Process forecast points: use real stored quantile bands if present, or expanding cone fallback
   for (let h = 0; h < predictions.length; h++) {
     const f = predictions[h];
     const stepNum = h + 1;
@@ -88,12 +109,20 @@ export function buildForecastBandSeries(
           : String(f.hour)
         : `+${stepNum}h`;
 
-    // Expanding confidence cone over horizon: sqrt((h+1)/horizon)
-    const coneExpansion = Math.sqrt((h + 1) / horizon);
-    const halfWidth = Math.round(baseSpread * (0.8 + 0.6 * coneExpansion));
+    let lower: number;
+    let upper: number;
 
-    const lower = Math.round(f.mean - halfWidth);
-    const upper = Math.round(f.mean + halfWidth);
+    if (f.bandLower !== undefined && f.bandUpper !== undefined) {
+      // Use exact empirical residual quantiles from the backtest
+      lower = Math.round(f.bandLower);
+      upper = Math.round(f.bandUpper);
+    } else {
+      // Expanding confidence cone over horizon: sqrt((h+1)/horizon)
+      const coneExpansion = Math.sqrt((h + 1) / horizon);
+      const halfWidth = Math.round(baseSpread * (0.8 + 0.6 * coneExpansion));
+      lower = Math.round(f.mean - halfWidth);
+      upper = Math.round(f.mean + halfWidth);
+    }
 
     result.push({
       step: label,

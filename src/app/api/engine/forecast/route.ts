@@ -31,6 +31,7 @@ import { type OrgAuthContext } from "@/server/auth";
 import { forecastsRepo } from "@/server/repositories/forecasts";
 import { auditRepo } from "@/server/repositories/audit";
 import { canonicalJsonHash } from "@/server/repositories/common";
+import { calculateQuantile } from "@/engine/reserve";
 
 export const POST = withAuth(
   async function forecastRoute(
@@ -180,10 +181,27 @@ export const POST = withAuth(
             },
             asOf: asOfDate,
             horizon: horizonHours,
-            points: predictions.map((p, idx) => ({
-              ts: new Date(asOfMs + (idx + 1) * 60 * 60 * 1000),
-              mean: p.amountMinor,
-            })),
+            points: predictions.map((p, idx) => {
+              let bandLowerMinor: string | undefined;
+              let bandUpperMinor: string | undefined;
+              if (backtest.windows.length > 0) {
+                const stepResiduals = backtest.windows.map(
+                  (w) => Number(w.residuals[idx]?.amountMinor ?? 0n)
+                );
+                if (stepResiduals.length > 0) {
+                  const q05 = calculateQuantile(stepResiduals, 0.05);
+                  const q95 = calculateQuantile(stepResiduals, 0.95);
+                  bandLowerMinor = (p.amountMinor + BigInt(Math.round(q05))).toString();
+                  bandUpperMinor = (p.amountMinor + BigInt(Math.round(q95))).toString();
+                }
+              }
+              return {
+                ts: new Date(asOfMs + (idx + 1) * 60 * 60 * 1000),
+                mean: p.amountMinor,
+                bandLower: bandLowerMinor,
+                bandUpper: bandUpperMinor,
+              };
+            }),
             residualQuantiles: {
               mase: backtest.metrics.mase,
               maeMinor: backtest.metrics.maeMinor,
@@ -194,6 +212,7 @@ export const POST = withAuth(
             backtest: {
               mase: backtest.metrics.mase,
               pinball: backtest.metrics.pinballLoss95,
+              sampleSize: backtest.windowCount,
             },
           },
           authContext.user.uid

@@ -17,6 +17,10 @@ export interface ForecastPoint {
   ts: Date;
   mean: Money;
   meanMinor: string;
+  bandLower?: Money;
+  bandLowerMinor?: string;
+  bandUpper?: Money;
+  bandUpperMinor?: string;
 }
 
 export interface ForecastRecord {
@@ -32,7 +36,9 @@ export interface ForecastRecord {
     mase: number;
     pinball: number;
     skillVsBaseline?: number;
+    sampleSize?: number;
   };
+  source?: "synthetic" | "import" | "live";
   createdAt: Date;
   createdBy: string;
 }
@@ -46,13 +52,17 @@ export interface CreateForecastInput {
   points: Array<{
     ts: Date;
     mean: Money | string | bigint | number;
+    bandLower?: Money | string | bigint | number;
+    bandUpper?: Money | string | bigint | number;
   }>;
   residualQuantiles: Record<string, number>;
   backtest: {
     mase: number;
     pinball: number;
     skillVsBaseline?: number;
+    sampleSize?: number;
   };
+  source?: "synthetic" | "import" | "live";
 }
 
 export const forecastsRepo = {
@@ -74,12 +84,17 @@ export const forecastsRepo = {
     const id = docRef.id;
 
     const now = new Date();
-    const serializedPoints = input.points.map((p) => ({
-      ts: toTimestamp(p.ts),
-      meanMinor: moneyToDecimalString(p.mean),
-    }));
+    const serializedPoints = input.points.map((p) => {
+      const pt: Record<string, unknown> = {
+        ts: toTimestamp(p.ts),
+        meanMinor: moneyToDecimalString(p.mean),
+      };
+      if (p.bandLower !== undefined) pt.bandLowerMinor = moneyToDecimalString(p.bandLower);
+      if (p.bandUpper !== undefined) pt.bandUpperMinor = moneyToDecimalString(p.bandUpper);
+      return pt;
+    });
 
-    const docData = {
+    const docData: Record<string, unknown> = {
       id,
       orgId: validOrgId,
       method: input.method,
@@ -92,6 +107,7 @@ export const forecastsRepo = {
       createdAt: toTimestamp(now),
       createdBy: validActor,
     };
+    if (input.source) docData.source = input.source;
 
     validateDoc(ForecastDocSchema, docData, id);
     await docRef.set(docData);
@@ -105,14 +121,21 @@ export const forecastsRepo = {
       horizon: input.horizon,
       points: input.points.map((p) => {
         const meanMinor = moneyToDecimalString(p.mean);
+        const bandLowerMinor = p.bandLower !== undefined ? moneyToDecimalString(p.bandLower) : undefined;
+        const bandUpperMinor = p.bandUpper !== undefined ? moneyToDecimalString(p.bandUpper) : undefined;
         return {
           ts: p.ts,
           mean: decimalStringToMoney(meanMinor),
           meanMinor,
+          bandLower: bandLowerMinor ? decimalStringToMoney(bandLowerMinor) : undefined,
+          bandLowerMinor,
+          bandUpper: bandUpperMinor ? decimalStringToMoney(bandUpperMinor) : undefined,
+          bandUpperMinor,
         };
       }),
       residualQuantiles: input.residualQuantiles,
       backtest: input.backtest,
+      source: input.source,
       createdAt: now,
       createdBy: validActor,
     };
@@ -143,9 +166,14 @@ export const forecastsRepo = {
         ts: toDate(p.ts),
         mean: decimalStringToMoney(p.meanMinor),
         meanMinor: p.meanMinor,
+        bandLower: p.bandLowerMinor ? decimalStringToMoney(p.bandLowerMinor) : undefined,
+        bandLowerMinor: p.bandLowerMinor,
+        bandUpper: p.bandUpperMinor ? decimalStringToMoney(p.bandUpperMinor) : undefined,
+        bandUpperMinor: p.bandUpperMinor,
       })),
       residualQuantiles: data.residualQuantiles,
       backtest: data.backtest,
+      source: data.source,
       createdAt: toDate(data.createdAt),
       createdBy: data.createdBy,
     };
@@ -182,9 +210,14 @@ export const forecastsRepo = {
           ts: toDate(p.ts),
           mean: decimalStringToMoney(p.meanMinor),
           meanMinor: p.meanMinor,
+          bandLower: p.bandLowerMinor ? decimalStringToMoney(p.bandLowerMinor) : undefined,
+          bandLowerMinor: p.bandLowerMinor,
+          bandUpper: p.bandUpperMinor ? decimalStringToMoney(p.bandUpperMinor) : undefined,
+          bandUpperMinor: p.bandUpperMinor,
         })),
         residualQuantiles: data.residualQuantiles,
         backtest: data.backtest,
+        source: data.source,
         createdAt: toDate(data.createdAt),
         createdBy: data.createdBy,
       };
