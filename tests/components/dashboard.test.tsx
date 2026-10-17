@@ -96,7 +96,7 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
       );
 
       expect(screen.getByTestId("sample-data-badge")).toBeDefined();
-      expect(screen.getByText(/Demonstration Mode:/i)).toBeDefined();
+      expect(screen.getAllByText(/Demonstration Mode:/i).length).toBeGreaterThan(0);
       expect(screen.queryByTestId("live-data-badge")).toBeNull();
       expect(screen.queryByTestId("run-engine-button")).toBeNull();
     });

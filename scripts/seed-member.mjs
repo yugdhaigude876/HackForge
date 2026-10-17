@@ -21,11 +21,15 @@ if (fs.existsSync(envLocalPath)) {
   }
 }
 
-const rawSa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+let rawSa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
 if (!rawSa) {
   console.error("❌ Error: FIREBASE_SERVICE_ACCOUNT_JSON is missing in .env.local.");
   console.error("Please add your Firebase Admin service account JSON string to .env.local first.");
   process.exit(1);
+}
+
+if ((rawSa.startsWith("'") && rawSa.endsWith("'")) || (rawSa.startsWith('"') && rawSa.endsWith('"'))) {
+  rawSa = rawSa.slice(1, -1).trim();
 }
 
 const uid = process.argv[2];
@@ -74,6 +78,55 @@ try {
     createdAt: Timestamp.now(),
     createdBy: "system_bootstrap",
   });
+
+  // Seed default instruments if none exist
+  const existingInstruments = await db.collection(`orgs/${orgId}/instruments`).limit(1).get();
+  if (existingInstruments.empty) {
+    console.log(`⏳ Seeding default treasury instruments for "${orgId}"...`);
+    const defaultInstruments = [
+      {
+        id: "overnight-repo",
+        orgId,
+        name: "Fed Overnight Repo",
+        annualRateBps: 450,
+        settlementLagHours: 0,
+        penaltyBps: 0,
+        capacityMinor: "5000000000",
+        minHoldHours: 0,
+        createdAt: Timestamp.now(),
+        createdBy: "system_bootstrap",
+      },
+      {
+        id: "7d-term-deposit",
+        orgId,
+        name: "7-Day Term Deposit",
+        annualRateBps: 485,
+        settlementLagHours: 24,
+        penaltyBps: 10,
+        capacityMinor: "3000000000",
+        minHoldHours: 24,
+        createdAt: Timestamp.now(),
+        createdBy: "system_bootstrap",
+      },
+      {
+        id: "30d-tbill-mmf",
+        orgId,
+        name: "30-Day Treasury Bill MMF",
+        annualRateBps: 520,
+        settlementLagHours: 48,
+        penaltyBps: 25,
+        capacityMinor: "2500000000",
+        minHoldHours: 48,
+        createdAt: Timestamp.now(),
+        createdBy: "system_bootstrap",
+      },
+    ];
+
+    for (const inst of defaultInstruments) {
+      await db.doc(`orgs/${orgId}/instruments/${inst.id}`).set(inst);
+    }
+    console.log(`✅ Seeded ${defaultInstruments.length} default treasury instruments.`);
+  }
 
   console.log(`✅ Success! UID "${uid}" is now an "${role}" of "${orgId}".`);
   console.log(`You can now sign in at http://localhost:3000/login and use the dashboard.`);

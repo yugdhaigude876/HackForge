@@ -53,7 +53,7 @@ Each phase ends with: tests pass, lint/tsc/build pass, docs updated.
 | 15 | Firestore repos and rules | Repositories, rules, emulator tests | Done (repos, rules, indexes, unit tests verified; emulator tests not executed due to missing Java) |
 | 16 | Persistence, audit, and dual-theme dashboard redesign | Persist forecasts, decisions, append-only SHA-256 audit records; read endpoints; dual-theme system (dark + soft off-white); dashboard redesign | Done (verified with 239 Vitest tests, lint, tsc, build, and browser subagent desktop & mobile verification) |
 | 17 | Wire dashboard to engine | Replace sample data with real engine output | Done (verified with 263 Vitest tests, lint, tsc, build, and browser subagent desktop & mobile verification in sample/mock mode) |
-| 18 | Stress scenario simulator | Outflow shock, settlement delay, run | Todo |
+| 18 | Stress scenario simulator | Outflow shock, settlement delay, run | Done (pure TS Monte Carlo engine in `src/engine/simulate.ts` with bootstrap residuals, 3 policies, liquidation & emergency borrowing, `/api/simulations` endpoints, persistence + audit, interactive dashboard stress panel; verified with 292 Vitest tests, lint, tsc, build, and browser verification in sample/mock mode) |
 | 19 | Digital twin UI | Scenario replay, policy comparison | Todo |
 | 20 | Analytics and explainability | Metrics vs baselines, decision explanations | Todo |
 | 21 | Security and reliability | Hardening, rate limits, e2e tests | Todo |

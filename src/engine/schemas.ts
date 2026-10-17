@@ -264,3 +264,82 @@ export function parseAllocatedHoldingInput(
     currentAmount: parseMoneyInput(input.currentAmount, currency),
   };
 }
+
+// ---------------------------------------------------------------------------
+// 4. Stress Scenario Simulation Schemas (Phase 18)
+// ---------------------------------------------------------------------------
+
+export const CorrelatedRunSchema = z.object({
+  /** Initial extra outflow shock percentage at t=0 of the run (0–100%) */
+  intensityPct: z.number().min(0).max(100),
+  /** Hourly exponential persistence / decay factor lambda in [0, 1] (e.g. 0.85) */
+  decay: z.number().min(0).max(1),
+});
+
+export const ScenarioSchema = z.object({
+  /** Outflow multiplier shock in percent (0–50%) */
+  outflowShockPct: z.number().min(0).max(50).default(0),
+
+  /** Delay in incoming merchant settlement arrivals in hours (0–72h) */
+  settlementDelayHours: z.number().int().min(0).max(72).default(0),
+
+  /** Offset from horizon start when the outflow shock begins (hours) */
+  shockStartHour: z.number().int().min(0).max(168).optional().default(0),
+
+  /** Duration of the outflow shock window (hours) */
+  shockDurationHours: z.number().int().positive().max(168).optional().default(24),
+
+  /** Optional correlated run parameterizing persistent bank-run outflow tails */
+  correlatedRun: CorrelatedRunSchema.optional(),
+
+  /** Shift in instrument APYs in basis points (can be negative or positive) */
+  yieldRateShockBps: z.number().int().min(-2000).max(2000).optional().default(0),
+
+  /** Array of instrument IDs that cannot be redeemed due to market freeze or outage */
+  instrumentOutageIds: z.array(z.string().min(1)).optional().default([]),
+
+  /** Reserve confidence level used by policies (0.50–0.999, default 0.99) */
+  confidence: z.number().min(0.5).max(0.999).default(0.99),
+});
+
+export type Scenario = z.infer<typeof ScenarioSchema>;
+export type ScenarioInput = z.input<typeof ScenarioSchema>;
+
+export const PolicyTypeEnum = z.enum([
+  "reserve-juggler",
+  "hold-all-cash",
+  "fixed-buffer",
+]);
+
+export type PolicyType = z.infer<typeof PolicyTypeEnum>;
+
+export const SimulationRequestSchema = z.object({
+  /** Stress test scenario configuration */
+  scenario: ScenarioSchema,
+
+  /** Liquidity management policy under test */
+  policy: PolicyTypeEnum.optional().default("reserve-juggler"),
+
+  /** Optional parameters for specific policies (e.g. fixed buffer percentage) */
+  policyParams: z
+    .object({
+      /** For fixed-buffer policy: fraction of cash retained as liquid reserve [0, 1] */
+      bufferPct: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
+
+  /** Simulation horizon in hours (1..168, default: 24) */
+  horizonHours: z.number().int().positive().max(168).optional().default(24),
+
+  /** Number of Monte Carlo bootstrap trials (1..2000, default: 500) */
+  trials: z.number().int().positive().max(2000).optional().default(500),
+
+  /** PRNG seed for exact reproducibility */
+  seed: z.string().optional(),
+
+  /** Emergency borrowing rate in basis points annualized (default: 1000 = 10%) */
+  emergencyBorrowingRateBps: z.number().int().nonnegative().optional().default(1000),
+});
+
+export type SimulationRequest = z.infer<typeof SimulationRequestSchema>;
+

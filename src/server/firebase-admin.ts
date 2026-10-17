@@ -14,11 +14,18 @@ export class MissingFirebaseAdminConfigError extends Error {
 let cachedAdminApp: App | null = null;
 
 function parseServiceAccount(): ServiceAccount {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  let raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
   if (!raw) {
     throw new MissingFirebaseAdminConfigError(
       "FIREBASE_SERVICE_ACCOUNT_JSON environment variable is not set. Server Firebase Admin credentials are required."
     );
+  }
+
+  if (
+    (raw.startsWith("'") && raw.endsWith("'")) ||
+    (raw.startsWith('"') && raw.endsWith('"'))
+  ) {
+    raw = raw.slice(1, -1).trim();
   }
 
   let parsed: Record<string, unknown>;

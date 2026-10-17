@@ -485,7 +485,7 @@ export default function DashboardPage() {
 
             {/* Stress Scenario Simulator Panel (1 col) */}
             <div className="xl:col-span-1">
-              <StressSimulatorPanel />
+              <StressSimulatorPanel isLive={isLive} userRole={data?.userRole} />
             </div>
           </div>
 

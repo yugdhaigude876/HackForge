@@ -147,8 +147,43 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
   - Live and sample data are never mixed in a single view.
 - **Role-Based Controls**: The "Run engine" action is visible only to `analyst` and `admin` roles, and is hidden completely for users with `viewer` permissions.
 
+## Stress Scenario Simulator & Digital Twin API (Phase 18)
+
+### Monte Carlo Simulation Engine (`src/engine/simulate.ts`)
+- **Pure Function Contract**: Deterministic, zero I/O, seeded PRNG bootstrap resampling from empirical historical residuals.
+- **Parametric Shocks**:
+  - Outflow shock multiplier (0–50%) over window $[t_{\text{start}}, t_{\text{start}} + t_{\text{duration}}]$.
+  - Settlement delay (0–72h) delaying inbound merchant settlements to $t + \Delta t$.
+  - Correlated bank-run tails with intensity $I$ and exponential decay $\delta^\tau$.
+  - Yield rate shifts ($\pm 2000$ bps) applied to instrument APYs.
+  - Instrument outage freezing (`instrumentOutageIds`) simulating market illiquidity.
+- **Liquidity Policies**: `reserve-juggler` (dynamic reserve + optimizer), `hold-all-cash` (100% liquid cash baseline), `fixed-buffer` (configurable buffer percentage).
+- **Liquidation & Deficit Funding**: Reuses `solveLiquidation` prioritized by lowest early withdrawal penalty then shortest settlement lag; any remaining deficit is funded through emergency borrowing at annualized rate $\lambda_{\text{borrow}}$.
+- **Bounded Compute**: Default 500 trials (hard cap 2,000), horizon cap 168 hours; completes in 20–60 ms on standard V8 runtimes, well under Vercel serverless function timeouts.
+
+### Endpoints
+1. **`POST /api/simulations`**:
+   - Minimum role: `analyst` (viewers receive 403 Forbidden).
+   - Rate limit: 10-second per-org debouncing limiter returning 429 with `Retry-After`.
+   - Requires existing instruments and series history; returns 400 `VALIDATION_ERROR` with clear error descriptions if missing.
+   - Runs simulation, persists record to `orgs/{orgId}/simulations`, appends SHA-256 audit entry, and returns result envelope.
+   - Persistence failure returns `persisted: false` with a generic warning, logging details server-side only.
+2. **`GET /api/simulations`**:
+   - Minimum role: `viewer`.
+   - Lists historical simulations newest first with bounded pagination (`limit` clamped 1–100).
+3. **`GET /api/simulations/[id]`**:
+   - Minimum role: `viewer`.
+   - Fetches single simulation record by ID within the authenticated organisation.
+
+### Dashboard Stress Panel (`src/components/finance/stress-simulator-panel.tsx`)
+- Interactive sliders for outflow shock, settlement delay, reserve confidence, and policy selection with visible numerical readouts.
+- "Run simulation" button active only for `analyst`/`admin` roles in live mode; displays 429 countdown when rate-limited.
+- Inline KPI readout grid (shortfall frequency, expected shortfall, emergency borrowing cost, penalties paid, net yield) and median cash path with p5–p95 confidence band rendered via Recharts with CSS variable theme support.
+- When unauthenticated or in mock mode, controls are disabled and a clear "Demonstration Mode" message directs users to sign in with a real account.
+
 ## Deployment
 Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
 ## Current Implementation Status
-Phases 1 through 17 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision), Route Handlers (`/api/engine/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), and full dashboard wiring (`/api/dashboard/summary`, `/api/dashboard/run`, `useDashboardData`). Tested with 263 Vitest unit/integration tests and visual browser subagent verification across desktop and mobile form factors.
+Phases 1 through 18 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision, simulate), Route Handlers (`/api/engine/*`, `/api/simulations/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, decision read endpoints (`/api/decisions`), dual-theme system (dark + soft off-white), full dashboard wiring (`/api/dashboard/summary`, `/api/dashboard/run`, `useDashboardData`), and the stress scenario simulator with interactive dashboard panel. Tested with 292 Vitest unit/integration tests and visual browser subagent verification across desktop and mobile form factors.
+

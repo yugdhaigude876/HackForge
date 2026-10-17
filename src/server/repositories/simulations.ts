@@ -8,20 +8,22 @@ import { SimulationDocSchema, validateDoc } from "./schemas";
 export interface SimulationRecord {
   id: string;
   orgId: string;
-  scenario: string;
-  seed: number;
+  scenario: string | Record<string, unknown>;
+  seed: number | string;
   policy: string | Record<string, unknown>;
   metrics: Record<string, unknown>;
+  source?: "synthetic" | "import" | "live";
   createdAt: Date;
   createdBy: string;
 }
 
 export interface CreateSimulationInput {
   id?: string;
-  scenario: string;
-  seed: number;
+  scenario: string | Record<string, unknown>;
+  seed: number | string;
   policy: string | Record<string, unknown>;
   metrics: Record<string, unknown>;
+  source?: "synthetic" | "import" | "live";
 }
 
 export const simulationsRepo = {
@@ -50,6 +52,7 @@ export const simulationsRepo = {
       seed: input.seed,
       policy: input.policy,
       metrics: input.metrics,
+      ...(input.source ? { source: input.source } : {}),
       createdAt: toTimestamp(now),
       createdBy: validActor,
     };
@@ -64,6 +67,7 @@ export const simulationsRepo = {
       seed: input.seed,
       policy: input.policy,
       metrics: input.metrics,
+      source: input.source,
       createdAt: now,
       createdBy: validActor,
     };
@@ -90,6 +94,7 @@ export const simulationsRepo = {
       seed: data.seed,
       policy: data.policy,
       metrics: data.metrics,
+      source: data.source,
       createdAt: toDate(data.createdAt),
       createdBy: data.createdBy,
     };
@@ -125,6 +130,7 @@ export const simulationsRepo = {
         seed: data.seed,
         policy: data.policy,
         metrics: data.metrics,
+        source: data.source,
         createdAt: toDate(data.createdAt),
         createdBy: data.createdBy,
       };
