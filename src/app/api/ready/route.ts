@@ -16,23 +16,31 @@ export async function GET(): Promise<NextResponse> {
           clientProjectId: string | null;
           projectsMatch: boolean;
           authAdmin: "ok" | "failed";
+          authAdminErrorCode?: string;
         }
       | undefined;
     try {
       const adminProjectId = admin.getAdminApp().options.projectId ?? null;
       const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || null;
       let authAdmin: "ok" | "failed" = "ok";
+      let authAdminErrorCode: string | undefined;
       try {
         // Confirms the service account may use the Auth Admin API (needed for revocation checks)
         await admin.getAdminAuth().listUsers(1);
-      } catch {
+      } catch (authErr) {
         authAdmin = "failed";
+        // Error code only (for example auth/insufficient-permission or app/network-error). No message text.
+        authAdminErrorCode =
+          typeof authErr === "object" && authErr !== null && "code" in authErr
+            ? String((authErr as { code: unknown }).code).slice(0, 80)
+            : "unknown";
       }
       config = {
         adminProjectId,
         clientProjectId,
         projectsMatch: adminProjectId !== null && adminProjectId === clientProjectId,
         authAdmin,
+        ...(authAdminErrorCode ? { authAdminErrorCode } : {}),
       };
     } catch {
       config = undefined;

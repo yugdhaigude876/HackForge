@@ -208,11 +208,14 @@ export async function apiFetch<T = unknown>(
   ) {
     const err = (responseData as { error: { code?: string; message?: string; details?: unknown; requestId?: string } }).error;
     const reqId = err.requestId || headerRequestId;
+    // Surface the server's coarse rejection reason (never a secret) so a failed sign-in is diagnosable on screen.
+    const reason = (err.details as { reason?: unknown } | undefined)?.reason;
+    const baseMessage = err.message || res.statusText || "Request failed";
     return {
       ok: false,
       error: {
         code: err.code || (res.status === 401 ? "UNAUTHENTICATED" : res.status === 403 ? "FORBIDDEN" : "INTERNAL"),
-        message: err.message || res.statusText || "Request failed",
+        message: typeof reason === "string" ? `${baseMessage} (reason: ${reason})` : baseMessage,
         details: err.details,
         requestId: reqId,
       },
