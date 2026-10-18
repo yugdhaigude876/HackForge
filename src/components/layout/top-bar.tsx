@@ -14,6 +14,11 @@ import {
   ChevronRight,
   X,
   FileCheck,
+  PanelLeftClose,
+  PanelLeftOpen,
+  MoreHorizontal,
+  Zap,
+  Flame,
 } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
@@ -21,6 +26,7 @@ import { BrandLogo } from "@/components/brand/logo";
 import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
 import { ticksToNotifications, type LiveNotification } from "@/lib/live/adapters";
 import type { LiveConnection } from "@/lib/live/types";
+import { useSidebar } from "./sidebar-context";
 
 const NOTIFICATION_LABELS: Record<LiveNotification["type"], string> = {
   SWEEP: "SWEEP EXECUTED",
@@ -45,9 +51,19 @@ const CONNECTION_STYLES: Record<LiveConnection, { label: string; className: stri
   paused: { label: "PAUSED", className: "border-border bg-surface-2 text-muted", dot: "bg-muted" },
   completed: { label: "COMPLETED", className: "border-accent-blue/35 bg-accent-blue/15 text-accent-blue", dot: "bg-accent-blue" },
   connecting: { label: "CONNECTING", className: "border-border bg-surface-2 text-muted", dot: "bg-muted animate-pulse" },
-  offline: { label: "OFFLINE · STALE", className: "border-accent-gold/40 bg-accent-gold/15 text-accent-gold", dot: "bg-accent-gold" },
+  offline: { label: "OFFLINE", className: "border-accent-gold/40 bg-accent-gold/15 text-accent-gold", dot: "bg-accent-gold" },
   "permission-denied": { label: "NO ACCESS", className: "border-accent-crimson/40 bg-accent-crimson/15 text-accent-crimson", dot: "bg-accent-crimson" },
   empty: { label: "NO STREAM", className: "border-border bg-surface-2 text-muted", dot: "bg-muted" },
+};
+
+const CONNECTION_TITLES: Record<LiveConnection, string> = {
+  live: "Realtime dataset stream is live",
+  paused: "Dataset clock is paused",
+  completed: "The whole dataset has been streamed",
+  connecting: "Connecting to the realtime stream",
+  offline: "Connection lost. Showing the last known state",
+  "permission-denied": "No access to this organisation's stream. Check that the Firestore rules are deployed and you are a member",
+  empty: "No realtime stream for this session",
 };
 
 function ConnectionPill({ connection }: { connection: LiveConnection }) {
@@ -56,13 +72,18 @@ function ConnectionPill({ connection }: { connection: LiveConnection }) {
     <div
       data-testid="connection-pill"
       data-connection={connection}
-      className={`hidden md:flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[10px] font-mono font-bold shadow-sm ${s.className}`}
-      title="Realtime dataset stream connection"
+      className={`hidden md:flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2 py-1 text-[10px] font-mono font-bold ${s.className}`}
+      title={CONNECTION_TITLES[connection]}
     >
-      <span className={`h-2 w-2 rounded-full ${s.dot}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
       <span>{s.label}</span>
     </div>
   );
+}
+
+/** "2026-01-01 00:00:00 UTC" becomes "2026-01-01 00:00 UTC" so it fits on one line. */
+function compactClock(value: string): string {
+  return value.replace(/:\d{2}(\s*UTC)$/, "$1");
 }
 
 export interface TopBarProps {
@@ -112,54 +133,77 @@ export function TopBar({
   notifications: notificationsProp,
 }: TopBarProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const live = useLiveTreasury();
+  const { collapsed, toggle } = useSidebar();
   const notifications = useMemo(
     () => notificationsProp ?? (live.enabled ? ticksToNotifications(live.ticks) : []),
     [notificationsProp, live.enabled, live.ticks]
   );
+  const hasActions = Boolean(onTriggerSweep || onRunStressTest || onExportAuditCsv);
+
+  const statusTone =
+    solvencyStatus === "HEALTHY"
+      ? "border-accent-teal/35 bg-accent-teal/15 text-accent-teal"
+      : solvencyStatus === "LOW_CONFIDENCE"
+      ? "border-accent-gold/40 bg-accent-gold/15 text-accent-gold"
+      : "border-accent-crimson/50 bg-accent-crimson/20 text-accent-crimson animate-pulse";
 
   return (
     <>
-      <header data-testid="top-bar" className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-border bg-surface/85 px-4 lg:px-6 backdrop-blur-xl transition-colors duration-150">
-        {/* Left: Mobile Nav toggle + Breadcrumb & Timeline Ticker */}
-        <div className="flex items-center gap-3 min-w-0">
+      <header
+        data-testid="top-bar"
+        className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b border-border bg-surface/85 px-3 lg:px-5 backdrop-blur-xl transition-colors duration-150"
+      >
+        {/* Left: navigation controls and breadcrumb */}
+        <div className="flex min-w-0 items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
             onClick={onToggleMobileNav}
-            className="lg:hidden text-muted hover:text-foreground"
+            className="lg:hidden shrink-0 text-muted hover:text-foreground"
             aria-label="Open navigation menu"
           >
             <Menu className="h-5 w-5" />
           </Button>
 
+          <button
+            type="button"
+            onClick={toggle}
+            data-testid="topbar-sidebar-toggle"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)"}
+            className="hidden lg:flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2 text-muted hover:text-foreground hover:border-border-strong transition-colors"
+          >
+            {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
+
           <BrandLogo size={28} className="lg:hidden shrink-0" />
 
-          {/* Interactive Breadcrumb Hierarchy */}
-          <nav aria-label="Breadcrumb" className="hidden sm:flex items-center gap-1.5 text-xs font-medium text-muted">
-            <span className="hover:text-foreground cursor-pointer transition-colors">Workstation</span>
-            <ChevronRight className="h-3.5 w-3.5 text-muted/60" />
-            <span className="font-semibold text-foreground">{breadcrumb}</span>
+          <nav aria-label="Breadcrumb" className="hidden md:flex min-w-0 items-center gap-1.5 text-xs font-medium text-muted">
+            <span className="truncate">Workstation</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted/60" />
+            <span className="truncate font-semibold text-foreground">{breadcrumb}</span>
           </nav>
+        </div>
 
-          <div className="hidden sm:block h-4 w-px bg-border mx-1" />
-
-          {/* Simulation Clock Readout */}
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-1.5 font-mono text-xs text-foreground shadow-sm">
-            <Clock className="h-3.5 w-3.5 text-accent-blue" />
-            <span className="font-semibold tracking-tight tabular-nums">{clockTimestamp}</span>
+        {/* Center: simulation clock, replay controls, repo window */}
+        <div className="flex shrink-0 items-center gap-2">
+          <div
+            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 font-mono text-xs text-foreground"
+            title="Dataset clock (UTC)"
+          >
+            <Clock className="h-3.5 w-3.5 shrink-0 text-accent-blue" />
+            <span className="font-semibold tabular-nums">{compactClock(clockTimestamp)}</span>
           </div>
 
-          {/* Timeline Playback Controls */}
           {onPlayToggle && (
-            <div className="hidden md:flex items-center gap-1 rounded-xl border border-border bg-surface-2 p-1">
+            <div className="hidden lg:flex items-center gap-1 rounded-lg border border-border bg-surface-2 p-0.5">
               <button
                 type="button"
                 onClick={onPlayToggle}
-                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-all duration-150 ${
-                  isPlaying
-                    ? "bg-accent-crimson text-white shadow-sm shadow-accent-crimson/25"
-                    : "bg-accent-blue text-white shadow-sm shadow-accent-blue/25 hover:bg-accent-blue/90"
+                className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-semibold transition-all duration-150 ${
+                  isPlaying ? "bg-accent-crimson text-white" : "bg-accent-blue text-white hover:bg-accent-blue/90"
                 }`}
               >
                 {isPlaying ? (
@@ -179,7 +223,7 @@ export function TopBar({
                 <button
                   type="button"
                   onClick={onStepHour}
-                  className="rounded-lg px-2 py-1 text-xs font-mono font-medium text-muted hover:bg-surface hover:text-foreground transition-colors"
+                  className="rounded-md px-2 py-1 text-xs font-mono font-medium text-muted hover:bg-surface hover:text-foreground transition-colors"
                   title="Advance 1 Hour"
                 >
                   +1h
@@ -187,16 +231,14 @@ export function TopBar({
               )}
 
               {onSpeedChange && (
-                <div className="flex items-center border-l border-border/80 pl-1 ml-1">
+                <div className="flex items-center border-l border-border/80 pl-1 ml-0.5">
                   {[1, 10, 60].map((s) => (
                     <button
                       key={s}
                       type="button"
                       onClick={() => onSpeedChange(s)}
-                      className={`rounded-md px-1.5 py-0.5 text-[10px] font-mono font-bold transition-all ${
-                        playbackSpeed === s
-                          ? "bg-accent-blue/20 text-accent-blue"
-                          : "text-muted hover:text-foreground"
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-bold transition-all ${
+                        playbackSpeed === s ? "bg-accent-blue/20 text-accent-blue" : "text-muted hover:text-foreground"
                       }`}
                     >
                       {s}x
@@ -207,142 +249,153 @@ export function TopBar({
             </div>
           )}
 
-          {/* Overnight Repo Window Indicator with Breathing Beacon */}
           {isRepoWindowOpen ? (
-            <div className="hidden xl:flex items-center gap-2 rounded-xl border border-accent-indigo/35 bg-accent-indigo/15 px-3 py-1.5 text-xs font-bold text-accent-indigo shadow-sm shadow-accent-indigo/10">
-              <span className="relative flex h-2 w-2">
+            <div className="hidden 2xl:flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-accent-indigo/35 bg-accent-indigo/15 px-2.5 py-1.5 text-[11px] font-bold text-accent-indigo">
+              <span className="relative flex h-1.5 w-1.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-indigo opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-accent-indigo" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-accent-indigo" />
               </span>
               <span>REPO SWEEP WINDOW OPEN (17:00 UTC)</span>
             </div>
           ) : isRepoMaturing ? (
-            <div className="hidden xl:flex items-center gap-2 rounded-xl border border-accent-teal/35 bg-accent-teal/15 px-3 py-1.5 text-xs font-bold text-accent-teal shadow-sm shadow-accent-teal/10">
-              <span className="h-2 w-2 rounded-full bg-accent-teal animate-breathing-beacon" />
+            <div className="hidden 2xl:flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-accent-teal/35 bg-accent-teal/15 px-2.5 py-1.5 text-[11px] font-bold text-accent-teal">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent-teal animate-breathing-beacon" />
               <span>REPO MATURED: +${repoMaturedYieldUsd?.toLocaleString() ?? "0"} EARNED</span>
             </div>
           ) : (
-            <div className="hidden xl:flex items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-1.5 text-xs font-mono text-muted">
-              <span className="h-2 w-2 rounded-full bg-muted/60" />
+            <div className="hidden 2xl:flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-[11px] font-mono text-muted">
+              <span className="h-1.5 w-1.5 rounded-full bg-muted/60" />
               <span>REPO WINDOW CLOSED</span>
             </div>
           )}
         </div>
 
-        {/* Right: Master Solvency Badge, Theme Toggle & Audit Drawer */}
-        <div className="flex items-center gap-2.5">
+        {/* Right: status and actions */}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {live.enabled && <ConnectionPill connection={live.connection} />}
 
           {source === "offline-fallback" && (
             <div
               data-testid="fallback-badge"
-              className="flex items-center gap-1.5 rounded-xl border border-accent-gold/40 bg-accent-gold/15 px-3 py-1.5 text-xs font-bold text-accent-gold font-mono shadow-sm"
+              className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-accent-gold/40 bg-accent-gold/15 px-2 py-1 text-[10px] font-bold text-accent-gold font-mono"
             >
-              <AlertTriangle className="h-3.5 w-3.5 text-accent-gold" />
+              <AlertTriangle className="h-3.5 w-3.5" />
               <span>Offline fallback</span>
             </div>
           )}
 
-          {/* Master Solvency Status Badge */}
-          {solvencyStatus === "HEALTHY" ? (
-            <div
-              data-testid="decision-status-value"
-              className="flex items-center gap-2 rounded-xl border border-accent-teal/35 bg-accent-teal/15 px-3 py-1.5 text-xs font-bold text-accent-teal shadow-sm"
-            >
-              <ShieldCheck className="h-4 w-4 text-accent-teal" />
-              <span>HEALTHY</span>
-              <span
-                data-testid="mase-chip"
-                className="hidden lg:inline font-mono text-[10px] text-accent-teal/80 font-normal"
-              >
-                · MASE: {mase?.toFixed(2) ?? "0.85"}
+          {/* Master solvency badge */}
+          <div
+            data-testid="decision-status-value"
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1 text-xs font-bold ${statusTone}`}
+            title={
+              solvencyStatus === "UNDER_RESERVED" && deficitAmountUsd > 0
+                ? `Deficit: $${deficitAmountUsd.toLocaleString()}`
+                : undefined
+            }
+          >
+            {solvencyStatus === "HEALTHY" ? (
+              <ShieldCheck className="h-4 w-4" />
+            ) : solvencyStatus === "LOW_CONFIDENCE" ? (
+              <AlertTriangle className="h-4 w-4" />
+            ) : (
+              <ShieldAlert className="h-4 w-4" />
+            )}
+            <span>
+              {solvencyStatus === "HEALTHY" ? "HEALTHY" : solvencyStatus === "LOW_CONFIDENCE" ? "LOW CONFIDENCE" : "UNDER-RESERVED"}
+            </span>
+            <span data-testid="mase-chip" className="hidden xl:inline font-mono text-[10px] font-normal opacity-80">
+              · MASE: {mase !== null && mase !== undefined ? mase.toFixed(2) : "n/a"}
+            </span>
+            <span data-testid="confidence-chip" className="hidden xl:inline font-mono text-[10px] font-normal opacity-80">
+              {solvencyStatus === "LOW_CONFIDENCE"
+                ? "· Buffer Expanded 1.5x"
+                : `· VaR: ${Math.round(confidence * 100)}% Conf.`}
+            </span>
+            {solvencyStatus === "UNDER_RESERVED" && deficitAmountUsd > 0 && (
+              <span className="hidden xl:inline font-mono text-[10px] font-normal">
+                · Deficit: ${deficitAmountUsd.toLocaleString()}
               </span>
-              <span
-                data-testid="confidence-chip"
-                className="hidden lg:inline font-mono text-[10px] text-accent-teal/80 font-normal"
+            )}
+          </div>
+
+          {/* Actions menu (replaces the crowded quick-action buttons) */}
+          {hasActions && (
+            <div className="relative hidden md:block">
+              <button
+                type="button"
+                onClick={() => setMenuOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                aria-label="More actions"
+                data-testid="topbar-actions"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-2 text-muted hover:text-foreground hover:border-border-strong transition-colors"
               >
-                · VaR: {Math.round(confidence * 100)}% Conf.
-              </span>
-            </div>
-          ) : solvencyStatus === "LOW_CONFIDENCE" ? (
-            <div
-              data-testid="decision-status-value"
-              className="flex items-center gap-2 rounded-xl border border-accent-gold/40 bg-accent-gold/15 px-3 py-1.5 text-xs font-bold text-accent-gold shadow-sm"
-            >
-              <AlertTriangle className="h-4 w-4 text-accent-gold" />
-              <span>LOW CONFIDENCE</span>
-              <span
-                data-testid="mase-chip"
-                className="hidden lg:inline font-mono text-[10px] text-accent-gold/80 font-normal"
-              >
-                · MASE: {mase?.toFixed(2) ?? "1.35"}
-              </span>
-              <span
-                data-testid="confidence-chip"
-                className="hidden lg:inline font-mono text-[10px] text-accent-gold/80 font-normal"
-              >
-                · Buffer Expanded 1.5x
-              </span>
-            </div>
-          ) : (
-            <div
-              data-testid="decision-status-value"
-              className="flex items-center gap-2 rounded-xl border border-accent-crimson/50 bg-accent-crimson/20 px-3 py-1.5 text-xs font-bold text-accent-crimson shadow-sm animate-pulse"
-            >
-              <ShieldAlert className="h-4 w-4 text-accent-crimson" />
-              <span>UNDER-RESERVED</span>
-              {deficitAmountUsd > 0 && (
-                <span className="hidden lg:inline font-mono text-[10px]">
-                  · Deficit: ${deficitAmountUsd.toLocaleString()}
-                </span>
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+              {menuOpen && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Close actions menu"
+                    className="fixed inset-0 z-30 cursor-default"
+                    onClick={() => setMenuOpen(false)}
+                  />
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-10 z-40 w-48 rounded-xl border border-border bg-surface-card p-1.5 shadow-xl"
+                  >
+                    {onTriggerSweep && (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onTriggerSweep();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-foreground hover:bg-surface-2"
+                      >
+                        <Zap className="h-3.5 w-3.5 text-accent-blue" /> Sweep 17:00
+                      </button>
+                    )}
+                    {onRunStressTest && (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onRunStressTest();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-foreground hover:bg-surface-2"
+                      >
+                        <Flame className="h-3.5 w-3.5 text-accent-gold" /> Stress Test
+                      </button>
+                    )}
+                    {onExportAuditCsv && (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onExportAuditCsv();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-foreground hover:bg-surface-2"
+                      >
+                        <Download className="h-3.5 w-3.5 text-muted" /> Export Audit CSV
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
 
-          {/* Quick Action Buttons */}
-          <div className="hidden 2xl:flex items-center gap-1.5">
-            {onTriggerSweep && (
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={onTriggerSweep}
-                className="text-xs h-8 px-3 font-semibold"
-              >
-                <Play className="mr-1 h-3 w-3 fill-current" />
-                Sweep 17:00
-              </Button>
-            )}
-
-            {onRunStressTest && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onRunStressTest}
-                className="text-xs h-8 px-3 font-medium"
-              >
-                Stress Test
-              </Button>
-            )}
-
-            {onExportAuditCsv && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onExportAuditCsv}
-                className="text-xs h-8 px-2.5 text-muted hover:text-foreground"
-                title="Export Audit CSV"
-              >
-                <Download className="h-3.5 w-3.5" />
-              </Button>
-            )}
-          </div>
-
-          {/* Notification / Decision Audit Drawer trigger */}
+          {/* Notification / decision audit drawer trigger */}
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-label="Open Decision Audit Drawer"
-            className="relative flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-surface-2 text-muted hover:border-border-strong hover:text-foreground transition-all"
+            className="relative flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-2 text-muted hover:border-border-strong hover:text-foreground transition-all"
           >
             <Bell className="h-4 w-4" />
             {notifications.length > 0 && (
@@ -353,12 +406,11 @@ export function TopBar({
             )}
           </button>
 
-          {/* Theme Toggle */}
-          <ThemeToggle className="h-8 w-8 rounded-xl border border-border bg-surface-2" />
+          <ThemeToggle className="h-8 w-8 rounded-lg border border-border bg-surface-2" />
         </div>
       </header>
 
-      {/* Decision Audit Drawer Slide-over */}
+      {/* Decision audit drawer slide-over */}
       {drawerOpen && (
         <div
           className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-sm transition-opacity"
@@ -378,13 +430,13 @@ export function TopBar({
                 </div>
                 <button
                   onClick={() => setDrawerOpen(false)}
+                  aria-label="Close drawer"
                   className="rounded-lg p-1 text-muted hover:bg-surface-2 hover:text-foreground transition-colors"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              {/* Event Feed */}
               <div className="space-y-3 font-mono text-xs" data-testid="notification-list">
                 {notifications.length === 0 ? (
                   <p className="rounded-xl border border-border bg-surface-2 p-3 font-sans text-[11px] text-muted">
@@ -410,11 +462,7 @@ export function TopBar({
             </div>
 
             <div className="pt-4 border-t border-border">
-              <Button
-                variant="outline"
-                className="w-full text-xs font-semibold"
-                onClick={() => setDrawerOpen(false)}
-              >
+              <Button variant="outline" className="w-full text-xs font-semibold" onClick={() => setDrawerOpen(false)}>
                 Close Audit Drawer
               </Button>
             </div>
