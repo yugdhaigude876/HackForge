@@ -3,6 +3,7 @@ import { withAuth, createErrorResponse } from "@/server/with-auth";
 import { simulationsRepo } from "@/server/repositories/simulations";
 import type { OrgAuthContext } from "@/server/auth";
 import { SIMULATION_DISCLAIMER } from "@/engine/simulate";
+import { validatePathId, IdValidationError } from "@/server/request-guards";
 
 interface RouteParams {
   params: Promise<{
@@ -27,6 +28,15 @@ export const GET = withAuth(
 
     if (!comparisonId) {
       return createErrorResponse(400, "VALIDATION_ERROR", "Missing comparisonId parameter.");
+    }
+
+    try {
+      validatePathId(comparisonId, "comparisonId");
+    } catch (valErr) {
+      if (valErr instanceof IdValidationError) {
+        return createErrorResponse(400, "VALIDATION_ERROR", valErr.message);
+      }
+      throw valErr;
     }
 
     try {

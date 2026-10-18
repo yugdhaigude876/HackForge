@@ -28,6 +28,7 @@ export function getGlobalTokenProvider(): TokenProvider | null {
 export interface ApiFetchOptions {
   orgId?: string;
   getToken?: TokenProvider;
+  timeoutMs?: number;
 }
 
 export interface ApiSuccessResult<T> {
@@ -48,14 +49,19 @@ export interface ApiErrorResult {
 
 export type ApiResponse<T> = ApiSuccessResult<T> | ApiErrorResult;
 
+export const DEFAULT_API_TIMEOUT_MS = 30_000;
+
 /**
  * Client-side fetch helper for protected Reserve Juggler engine routes.
+ * Enforces a 30-second timeout via AbortController, returning a typed TIMEOUT result.
+ * Only retries on 401 with forced token refresh (no retry for non-idempotent timeouts or 5xx).
  */
 export async function apiFetch<T = unknown>(
   path: string,
   init?: RequestInit,
   options?: ApiFetchOptions
 ): Promise<ApiResponse<T>> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
   const tokenGetter: TokenProvider =
     options?.getToken ??
     registeredTokenProvider ??
@@ -92,11 +98,40 @@ export async function apiFetch<T = unknown>(
     headers.set("Content-Type", "application/json");
   }
 
-  // 4. Initial request
-  let res = await fetch(path, {
-    ...init,
-    headers,
-  });
+  // 4. Initial request with timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if ((err as Error)?.name === "AbortError" || controller.signal.aborted) {
+      return {
+        ok: false,
+        status: 408,
+        error: {
+          code: "TIMEOUT",
+          message: `Request timed out after ${timeoutMs}ms`,
+        },
+      };
+    }
+    return {
+      ok: false,
+      status: 500,
+      error: {
+        code: "INTERNAL",
+        message: err instanceof Error ? err.message : "Network error",
+      },
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   // 5. Retry once with a forced refreshed token on 401
   if (res.status === 401) {
@@ -104,10 +139,39 @@ export async function apiFetch<T = unknown>(
     if (freshToken) {
       const retryHeaders = new Headers(headers);
       retryHeaders.set("Authorization", `Bearer ${freshToken}`);
-      res = await fetch(path, {
-        ...init,
-        headers: retryHeaders,
-      });
+
+      const retryController = new AbortController();
+      const retryTimeoutId = setTimeout(() => retryController.abort(), timeoutMs);
+
+      try {
+        res = await fetch(path, {
+          ...init,
+          headers: retryHeaders,
+          signal: retryController.signal,
+        });
+      } catch (err: unknown) {
+        clearTimeout(retryTimeoutId);
+        if ((err as Error)?.name === "AbortError" || retryController.signal.aborted) {
+          return {
+            ok: false,
+            status: 408,
+            error: {
+              code: "TIMEOUT",
+              message: `Retry request timed out after ${timeoutMs}ms`,
+            },
+          };
+        }
+        return {
+          ok: false,
+          status: 500,
+          error: {
+            code: "INTERNAL",
+            message: err instanceof Error ? err.message : "Network error on retry",
+          },
+        };
+      } finally {
+        clearTimeout(retryTimeoutId);
+      }
     }
   }
 

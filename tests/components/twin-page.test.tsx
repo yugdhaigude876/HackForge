@@ -156,6 +156,13 @@ describe("Digital Twin Page (/twin)", () => {
     });
 
     vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return {
+          ok: true,
+          status: 200,
+          data: { userRole: "analyst" } as any,
+        };
+      }
       if (endpoint === "/api/instruments") {
         return {
           ok: true,
@@ -202,6 +209,13 @@ describe("Digital Twin Page (/twin)", () => {
 
   it("executes comparison run, displays results banner, comparison table, chart, and winners", async () => {
     vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint, options) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return {
+          ok: true,
+          status: 200,
+          data: { userRole: "analyst" } as any,
+        };
+      }
       if (endpoint === "/api/simulations/compare" && options?.method === "POST") {
         return {
           ok: true,
@@ -232,7 +246,7 @@ describe("Digital Twin Page (/twin)", () => {
       </ThemeProvider>
     );
 
-    const runBtn = screen.getByTestId("run-comparison-btn");
+    const runBtn = await screen.findByTestId("run-comparison-btn");
     expect(runBtn).toBeDefined();
 
     fireEvent.click(runBtn);
@@ -257,6 +271,13 @@ describe("Digital Twin Page (/twin)", () => {
 
   it("replay scrubber steps forward, backward, and responds to keyboard navigation", async () => {
     vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint, options) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return {
+          ok: true,
+          status: 200,
+          data: { userRole: "analyst" } as any,
+        };
+      }
       if (endpoint === "/api/simulations/compare" && options?.method === "POST") {
         return {
           ok: true,
@@ -274,7 +295,8 @@ describe("Digital Twin Page (/twin)", () => {
     );
 
     // Run comparison
-    fireEvent.click(screen.getByTestId("run-comparison-btn"));
+    const runComparisonBtn = await screen.findByTestId("run-comparison-btn");
+    fireEvent.click(runComparisonBtn);
 
     await waitFor(() => {
       expect(screen.getByTestId("twin-replay-scrubber")).toBeDefined();
@@ -382,6 +404,71 @@ describe("Digital Twin Page (/twin)", () => {
       expect(
         screen.getByText(/You have Viewer permissions/i)
       ).toBeDefined();
+    });
+  });
+
+  it("hides run action while server role is loading (fail-closed)", async () => {
+    // Delay resolution of dashboard summary to simulate loading state
+    vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return new Promise(() => {}); // never resolves during test
+      }
+      return { ok: true, status: 200, data: { instruments: [], comparisons: [] } };
+    });
+
+    render(
+      <ThemeProvider>
+        <DigitalTwinPage />
+      </ThemeProvider>
+    );
+
+    // Run comparison button must not be visible while loading
+    expect(screen.queryByTestId("run-comparison-btn")).toBeNull();
+  });
+
+  it("hides run action and defaults to viewer if role fetch fails (fail-closed)", async () => {
+    vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return {
+          ok: false,
+          status: 500,
+          error: { code: "INTERNAL", message: "Failed to fetch summary" },
+        };
+      }
+      return { ok: true, status: 200, data: { instruments: [], comparisons: [] } };
+    });
+
+    render(
+      <ThemeProvider>
+        <DigitalTwinPage />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("run-comparison-btn")).toBeNull();
+    });
+  });
+
+  it("displays run comparison action for real analyst role", async () => {
+    vi.spyOn(apiClientModule, "apiFetch").mockImplementation(async (endpoint) => {
+      if (endpoint === "/api/dashboard/summary") {
+        return {
+          ok: true,
+          status: 200,
+          data: { userRole: "analyst", decision: null, forecast: null, actuals: [] },
+        };
+      }
+      return { ok: true, status: 200, data: { instruments: [], comparisons: [] } };
+    });
+
+    render(
+      <ThemeProvider>
+        <DigitalTwinPage />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("run-comparison-btn")).toBeDefined();
     });
   });
 });

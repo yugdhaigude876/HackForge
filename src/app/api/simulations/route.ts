@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { parseJsonBody, validatePaginationLimit } from "@/server/request-guards";
+import { enforceRateLimit, resetRateLimiterOverrides } from "@/server/rate-limiter";
+import { checkIdempotency, recordIdempotency } from "@/server/idempotency";
 import { simulationsRepo } from "@/server/repositories/simulations";
 import { decisionsRepo } from "@/server/repositories/decisions";
 import { instrumentsRepo } from "@/server/repositories/instruments";
 import { seriesRepo } from "@/server/repositories/series";
 import { auditRepo } from "@/server/repositories/audit";
-import { clampLimit, canonicalJsonHash } from "@/server/repositories/common";
+import { canonicalJsonHash } from "@/server/repositories/common";
 import { SimulationRequestSchema } from "@/engine/schemas";
 import { runSimulation, type SimulationResult } from "@/engine/simulate";
 import { Money } from "@/engine/money";
@@ -14,6 +17,8 @@ import { AllocatedHolding } from "@/engine/decision";
 import { generateTransactions } from "@/engine/generator";
 import { buildContinuousTimeSeries } from "@/engine/timeseries";
 import type { OrgAuthContext } from "@/server/auth";
+
+export const maxDuration = 60;
 
 // ---------------------------------------------------------------------------
 // Rate Limiter / Debouncer (Best-effort per serverless container)
@@ -29,6 +34,7 @@ export const MIN_SIM_INTERVAL_MS = 10_000;
 
 export function _resetSimulationRateLimiter(): void {
   orgLastSimTime.clear();
+  resetRateLimiterOverrides();
 }
 
 export function checkSimulationRateLimit(orgId: string): { allowed: boolean; retryAfterSeconds: number } {
@@ -101,9 +107,23 @@ export const POST = withAuth(
       );
     }
 
-    // 2. Rate Limiting / Debouncing (10s per org)
-    // NOTE: This limiter is in-memory and operates on a best-effort basis per serverless container.
-    // It is not a distributed hard guarantee across multiple serverless instances.
+    // 2. Idempotency Check
+    const { key: idempotencyKey, response: cachedResponse } = await checkIdempotency(request, orgId);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // 3. Durable Rate Limiting Check (org + user)
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "simulations.run",
+      orgId,
+      uid: user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
+    // Also check backwards-compatible 10s debouncing
     const lastRun = orgLastSimTime.get(orgId);
     const now = Date.now();
     if (lastRun && now - lastRun < MIN_SIM_INTERVAL_MS) {
@@ -126,25 +146,13 @@ export const POST = withAuth(
       );
     }
 
-    // 3. Request Body Validation
-    let rawJson: unknown;
-    try {
-      rawJson = await request.json();
-    } catch {
-      return createErrorResponse(400, "VALIDATION_ERROR", "Malformed JSON payload.");
+    // 4. Request Body Validation & Size Guard (64 KB limit, Content-Type application/json)
+    const bodyResult = await parseJsonBody(request, SimulationRequestSchema);
+    if (!bodyResult.success) {
+      return bodyResult.response;
     }
 
-    const parseResult = SimulationRequestSchema.safeParse(rawJson);
-    if (!parseResult.success) {
-      return createErrorResponse(
-        400,
-        "VALIDATION_ERROR",
-        `Invalid simulation parameters: ${parseResult.error.issues.map((i) => i.message).join(", ")}`,
-        parseResult.error.flatten()
-      );
-    }
-
-    const inputData = parseResult.data;
+    const inputData = bodyResult.data;
 
     // 4. Load Org Prerequisites (Instruments, Decisions, History)
     let orgInstruments: Instrument[] = [];
@@ -333,8 +341,8 @@ export const POST = withAuth(
         "Simulation was computed successfully, but result storage or audit trail encountered a transient error.";
     }
 
-    return NextResponse.json({
-      ok: true,
+    const successPayload = {
+      ok: true as const,
       data: {
         id: storedId ?? `sim-${Date.now()}`,
         ...serializedMetrics,
@@ -343,7 +351,11 @@ export const POST = withAuth(
         audited,
         ...(persistenceWarning ? { warning: persistenceWarning } : {}),
       },
-    });
+    };
+
+    await recordIdempotency(orgId, idempotencyKey, 200, successPayload);
+
+    return NextResponse.json(successPayload);
   }
 );
 
@@ -358,23 +370,11 @@ export const GET = withAuth(
     authContext: OrgAuthContext
   ): Promise<NextResponse> {
     try {
-      const searchParams = request.nextUrl.searchParams;
-      const rawLimit = searchParams.get("limit");
-      let parsedLimit: number | undefined = undefined;
-
-      if (rawLimit !== null) {
-        const num = Number(rawLimit);
-        if (Number.isNaN(num) || !Number.isInteger(num) || num < 1) {
-          return createErrorResponse(
-            400,
-            "VALIDATION_ERROR",
-            "Query parameter 'limit' must be a positive integer."
-          );
-        }
-        parsedLimit = num;
+      const limitResult = validatePaginationLimit(request.nextUrl.searchParams, 20, 100);
+      if ("errorResponse" in limitResult) {
+        return limitResult.errorResponse;
       }
-
-      const limit = clampLimit(parsedLimit, 20, 100);
+      const limit = limitResult.limit;
       const simulations = await simulationsRepo.list(authContext.orgId, { limit });
 
       const safeSimulations = simulations.map((s) => ({

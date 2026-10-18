@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
 import { decisionsRepo } from "@/server/repositories/decisions";
-import { clampLimit } from "@/server/repositories/common";
+import { validatePaginationLimit } from "@/server/request-guards";
 import type { OrgAuthContext } from "@/server/auth";
 
 /**
@@ -15,23 +15,11 @@ export const GET = withAuth(
     authContext: OrgAuthContext
   ): Promise<NextResponse> {
     try {
-      const searchParams = request.nextUrl.searchParams;
-      const rawLimit = searchParams.get("limit");
-      let parsedLimit: number | undefined = undefined;
-
-      if (rawLimit !== null) {
-        const num = Number(rawLimit);
-        if (Number.isNaN(num) || !Number.isInteger(num) || num < 1) {
-          return createErrorResponse(
-            400,
-            "VALIDATION_ERROR",
-            "Query parameter 'limit' must be a positive integer."
-          );
-        }
-        parsedLimit = num;
+      const limitResult = validatePaginationLimit(request.nextUrl.searchParams, 20, 100);
+      if ("errorResponse" in limitResult) {
+        return limitResult.errorResponse;
       }
-
-      const limit = clampLimit(parsedLimit, 20, 100);
+      const limit = limitResult.limit;
       const decisions = await decisionsRepo.list(authContext.orgId, { limit });
 
       const safeDecisions = decisions.map((d) => ({

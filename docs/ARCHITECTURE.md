@@ -243,6 +243,62 @@ Each successful execution in `/api/engine/forecast`, `/api/engine/decision`, and
 ## Deployment
 Vercel hosts the Next.js app; Firebase hosts Auth/Firestore. Secrets in Vercel env vars (`FIREBASE_SERVICE_ACCOUNT_JSON`). Function limits per [Vercel docs](https://vercel.com/docs/functions/limitations): keep each run well under 300 s and 4.5 MB payload.
 
+## Security & Reliability (Phase 21)
+
+### Security Headers Configuration (`next.config.ts`)
+Configured globally for all routes (`/:path*`) with `poweredByHeader: false`:
+
+| Header | Shipped Policy / Value | Purpose |
+| :--- | :--- | :--- |
+| **`Content-Security-Policy`** | `default-src 'self'; script-src 'self' 'unsafe-inline' https://apis.google.com https://*.firebaseapp.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.firebaseio.com; frame-src https://*.firebaseapp.com https://apis.google.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'` | Prevents XSS, data exfiltration, clickjacking, and unauthorized origin connections. Enforcing policy shipped. Scripts strictly disallow `unsafe-eval`. Inline scripts are permitted for Next.js hydration chunks and theme toggle script; a cryptographic nonce migration plan is documented below. |
+| **`X-Frame-Options`** | `DENY` | Prevents framing and clickjacking attacks across all legacy browsers. |
+| **`X-Content-Type-Options`** | `nosniff` | Disables MIME type sniffing by browsers. |
+| **`Referrer-Policy`** | `strict-origin-when-cross-origin` | Protects URI privacy during cross-origin requests. |
+| **`Permissions-Policy`** | `camera=(), microphone=(), geolocation=(), browsing-topics=()` | Disables sensitive browser sensor APIs. |
+| **`Strict-Transport-Security`** | `max-age=63072000; includeSubDomains; preload` (Production only) | Mandates TLS communication for two years including subdomains. |
+
+#### Inline Script Nonce Migration Plan
+Current inline scripts are restricted to the theme initialization snippet in `src/app/layout.tsx` and Next.js hydration. To migrate to strict nonces without `'unsafe-inline'`:
+1. Generate an unguessable cryptographic nonce in Next.js middleware using `crypto.randomUUID()`.
+2. Attach `x-nonce` to request headers.
+3. Pass the nonce to Next.js `<Script nonce={nonce}>` tags and `<RootLayout>`.
+4. Replace `'unsafe-inline'` with `'nonce-{nonce}'` in `next.config.ts` or dynamic headers middleware.
+
+### Durable Rate Limiter (`src/server/rate-limiter.ts`)
+Mutating routes enforce dual rate limiting: per-organisation and per-user limits using atomic increments in the top-level Firestore collection `/limits/{routeKey_org|user_id}` with fixed 60-second sliding windows. If Firestore is unavailable, expensive endpoints fail **closed** with HTTP 503 (`RATE_LIMITED` / `INTERNAL` generic envelope).
+
+| Route / Key | Org Limit (per 60s) | User Limit (per 60s) | Fail Mode |
+| :--- | :--- | :--- | :--- |
+| **`POST /api/dashboard/run`** | 10 requests | 5 requests | Fail Closed (503) |
+| **`POST /api/simulations`** | 15 requests | 10 requests | Fail Closed (503) |
+| **`POST /api/simulations/compare`** | 10 requests | 5 requests | Fail Closed (503) |
+| **`POST /api/engine/generate`** | 30 requests | 15 requests | Fail Closed (503) |
+| **`POST /api/engine/forecast`** | 30 requests | 15 requests | Fail Closed (503) |
+| **`POST /api/engine/decision`** | 30 requests | 15 requests | Fail Closed (503) |
+
+Responses on limit exceedance return `HTTP 429 Too Many Requests` with a numeric `Retry-After` header indicating remaining window seconds.
+
+### Request Hardening (`src/server/request-guards.ts`)
+- **Content-Type Enforcement:** Mutating POST/PUT endpoints reject non-`application/json` with `415 Unsupported Media Type`.
+- **Max Body Size Guard:** Rejects payloads exceeding 64 KB with `413 Payload Too Large` before body parsing. 64 KB is calibrated against the largest valid multi-instrument payload (~8 KB).
+- **Strict Zod Schemas:** All input schemas enforce `.strict()` to reject untrusted or unexpected keys.
+- **Path Segment & ID Validation:** Path parameters (`[id]`, `[comparisonId]`) validated with regex `^[A-Za-z0-9_-]{1,64}$` before database interaction. Path traversal (`../`), null bytes, over-long IDs, and Unicode homoglyphs are rejected with 400.
+- **Log Redaction & Traceability:** All unexpected server errors are masked behind generic error envelopes (`INTERNAL: An unexpected error occurred`). Stack traces are never returned. Every request assigns or forwards `x-request-id` in logs and error responses. Bearer tokens, passwords, and raw emails are redacted, and user UIDs are truncated/hashed (`user_1...`).
+
+### Idempotency (`src/server/idempotency.ts`)
+Clients can supply an optional `Idempotency-Key` header (`^[A-Za-z0-9_-]{1,128}$`). If repeated within a 24-hour TTL, the cached status and payload are returned immediately with header `Idempotency-Replayed: true`, preventing duplicate engine calculations or repeated Firestore writes. Stored in `/idempotency/{key}` with `expireAt` timestamp.
+
+### Health & Readiness Endpoints
+- **`GET /api/health`**: Public, unauthenticated. Returns `{ ok: true, version: "0.2.0", time: "..." }`. Never echoes credentials, environment variables, or dependency details.
+- **`GET /api/ready`**: Public, unauthenticated. Probes Firebase Admin Firestore connectivity via read latency check. Returns `HTTP 200 { ok: true, status: "ready", latencyMs }` or `HTTP 503 { ok: false, status: "degraded" }` without leaking error traces.
+
+### Threat Notes & Accepted Risks
+1. **CSRF Immunity:** Authentication is exclusively handled via `Authorization: Bearer <token>` headers attached programmatically via `apiFetch`. No session cookies or browser credentials are read or respected by API route handlers, rendering Cross-Site Request Forgery (CSRF) mechanically non-applicable.
+2. **Third-Party Dependency Chain:** Overrides entry in `package.json` (`"@grpc/grpc-js": "^1.14.6"`) resolved 4 high vulnerabilities in `@firebase/firestore-compat`. `npm audit --omit=dev --json` reports 0 vulnerabilities.
+3. **Firestore Client Denials:** Security rules in `firestore.rules` explicitly deny all client read and write operations to `/limits/{id}` and `/idempotency/{id}`.
+4. **Vercel Execution Limits:** Heavy endpoints export `export const maxDuration = 60;`. Bounded work unit tests verify that 1,000 trials across 3 policies complete in ~50ms, well within serverless timeouts.
+
 ## Current Implementation Status
-Phases 1 through 20 are complete: pure TypeScript engine (money, forecast, reserve, optimizer, decision, simulate, multi-policy comparison, metrics, deterministic explanations), Route Handlers (`/api/engine/*`, `/api/simulations/*`, `/api/simulations/compare/*`, `/api/instruments`, `/api/analytics/*`, `/api/decisions/*`), Firebase client authentication with mock fallback and route guards, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, dual-theme system (dark + soft off-white), full dashboard wiring, stress scenario simulator, Digital Twin page (`/twin`), and dedicated pages for Forecast (`/forecast`), Reserve (`/reserve`), Optimizer (`/optimizer`), and Analytics (`/analytics`). Verified with 346 Vitest tests, ESLint, tsc, and Next.js 16 production build.
+Phases 1 through 21 are complete: pure TypeScript engine, Route Handlers, Firebase client authentication, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, dual-theme system, full dashboard wiring, stress scenario simulator, Digital Twin page (`/twin`), dedicated pages for Forecast, Reserve, Optimizer, and Analytics, and **Phase 21 Security & Reliability** (CSP and security headers, durable rate limiter, idempotency replay, request hardening, health/ready probes, e2e suite, and GitHub Actions CI). Verified with 389 Vitest tests, ESLint (0 errors, 0 warnings), tsc (0 errors), and Next.js 16 production build.
+
 

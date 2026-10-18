@@ -22,7 +22,7 @@ export const MoneyInputSchema = z.union([
   z.object({
     amountMinor: z.union([z.number(), z.string()]),
     currency: z.string().optional(),
-  }),
+  }).strict(),
 ]);
 
 export type MoneyInput = z.infer<typeof MoneyInputSchema>;
@@ -108,7 +108,7 @@ export const GenerateTransactionsRequestSchema = z.object({
 
   /** Currency code (default: "USD") */
   currency: z.string().min(3).max(3).optional().default("USD"),
-});
+}).strict();
 
 export type GenerateTransactionsRequest = z.infer<
   typeof GenerateTransactionsRequestSchema
@@ -160,7 +160,7 @@ export const ForecastRequestSchema = z.object({
 
   /** Currency code (default: "USD") */
   currency: z.string().min(3).max(3).optional().default("USD"),
-});
+}).strict();
 
 export type ForecastRequest = z.infer<typeof ForecastRequestSchema>;
 
@@ -177,12 +177,12 @@ export const InstrumentInputSchema = z.object({
   settlementLagHours: z.number().int().nonnegative().optional().default(0),
   minHoldHours: z.number().int().nonnegative().optional().default(0),
   earlyWithdrawalRisk: z.number().min(0).max(1).optional().default(0),
-});
+}).strict();
 
 export const AllocatedHoldingInputSchema = z.object({
   instrument: InstrumentInputSchema,
   currentAmount: MoneyInputSchema,
-});
+}).strict();
 
 export const DecisionRequestSchema = z.object({
   /** Available unencumbered cash balance C */
@@ -234,8 +234,9 @@ export const DecisionRequestSchema = z.object({
       maxMase: z.number().positive().optional(),
       conservativeBufferMultiplier: z.number().positive().optional(),
     })
+    .strict()
     .optional(),
-});
+}).strict();
 
 export type DecisionRequest = z.infer<typeof DecisionRequestSchema>;
 
@@ -274,7 +275,7 @@ export const CorrelatedRunSchema = z.object({
   intensityPct: z.number().min(0).max(100),
   /** Hourly exponential persistence / decay factor lambda in [0, 1] (e.g. 0.85) */
   decay: z.number().min(0).max(1),
-});
+}).strict();
 
 export const ScenarioSchema = z.object({
   /** Outflow multiplier shock in percent (0–50%) */
@@ -300,7 +301,7 @@ export const ScenarioSchema = z.object({
 
   /** Reserve confidence level used by policies (0.50–0.999, default 0.99) */
   confidence: z.number().min(0.5).max(0.999).default(0.99),
-});
+}).strict();
 
 export type Scenario = z.infer<typeof ScenarioSchema>;
 export type ScenarioInput = z.input<typeof ScenarioSchema>;
@@ -326,6 +327,7 @@ export const SimulationRequestSchema = z.object({
       /** For fixed-buffer policy: fraction of cash retained as liquid reserve [0, 1] */
       bufferPct: z.number().min(0).max(1).optional(),
     })
+    .strict()
     .optional(),
 
   /** Simulation horizon in hours (1..168, default: 24) */
@@ -348,7 +350,7 @@ export const SimulationRequestSchema = z.object({
 
   /** Source tag ('synthetic' allows startingCash and operationalFloor fallback without stored decision) */
   source: z.enum(["synthetic", "import", "live"]).optional(),
-});
+}).strict();
 
 export type SimulationRequest = z.infer<typeof SimulationRequestSchema>;
 
@@ -370,6 +372,7 @@ export const PolicyComparisonRequestSchema = z.object({
       /** For fixed-buffer policy: fraction of cash retained as liquid reserve [0, 1] */
       bufferPct: z.number().min(0).max(1).optional(),
     })
+    .strict()
     .optional(),
 
   /** Simulation horizon in hours (1..168, default: 24) */
@@ -392,7 +395,7 @@ export const PolicyComparisonRequestSchema = z.object({
 
   /** Source tag ('synthetic' allows startingCash and operationalFloor fallback without stored decision) */
   source: z.enum(["synthetic", "import", "live"]).optional(),
-});
+}).strict();
 
 export type PolicyComparisonRequest = z.infer<typeof PolicyComparisonRequestSchema>;
 

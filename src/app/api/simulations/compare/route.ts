@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { parseJsonBody } from "@/server/request-guards";
+import { enforceRateLimit } from "@/server/rate-limiter";
+import { checkIdempotency, recordIdempotency } from "@/server/idempotency";
 import { simulationsRepo } from "@/server/repositories/simulations";
 import { decisionsRepo } from "@/server/repositories/decisions";
 import { instrumentsRepo } from "@/server/repositories/instruments";
@@ -20,6 +23,8 @@ import { generateTransactions } from "@/engine/generator";
 import { buildContinuousTimeSeries } from "@/engine/timeseries";
 import type { OrgAuthContext } from "@/server/auth";
 import { checkSimulationRateLimit, recordSimulationRun } from "../route";
+
+export const maxDuration = 60;
 
 /**
  * Serializes an individual policy's simulation result into a JSON-safe DTO.
@@ -105,9 +110,23 @@ export const POST = withAuth(
       );
     }
 
-    // 2. Shared Rate Limiting / Debouncing (10s per org)
-    // NOTE: This limiter is in-memory and operates on a best-effort basis per serverless container.
-    // It is not a distributed hard guarantee across multiple serverless instances.
+    // 2. Idempotency Check
+    const { key: idempotencyKey, response: cachedResponse } = await checkIdempotency(request, orgId);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // 3. Durable Rate Limiting Check (org + user)
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "simulations.compare",
+      orgId,
+      uid: user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
+    // Also check backwards-compatible 10s debouncing
     const rateCheck = checkSimulationRateLimit(orgId);
     if (!rateCheck.allowed) {
       return NextResponse.json(
@@ -128,25 +147,13 @@ export const POST = withAuth(
       );
     }
 
-    // 3. Request Body Validation
-    let rawJson: unknown;
-    try {
-      rawJson = await request.json();
-    } catch {
-      return createErrorResponse(400, "VALIDATION_ERROR", "Malformed JSON payload.");
+    // 4. Request Body Validation & Size Guard (64 KB limit, Content-Type application/json)
+    const bodyResult = await parseJsonBody(request, PolicyComparisonRequestSchema);
+    if (!bodyResult.success) {
+      return bodyResult.response;
     }
 
-    const parseResult = PolicyComparisonRequestSchema.safeParse(rawJson);
-    if (!parseResult.success) {
-      return createErrorResponse(
-        400,
-        "VALIDATION_ERROR",
-        `Invalid comparison parameters: ${parseResult.error.issues.map((i) => i.message).join(", ")}`,
-        parseResult.error.flatten()
-      );
-    }
-
-    const inputData = parseResult.data;
+    const inputData = bodyResult.data;
     const policies = inputData.policies ?? ["reserve-juggler", "hold-all-cash", "fixed-buffer"];
 
     // 4. Cap Total Work to protect serverless compute (trials x policies <= 3000)
@@ -357,8 +364,8 @@ export const POST = withAuth(
         "Comparison was computed successfully, but result storage or audit trail encountered a transient error.";
     }
 
-    return NextResponse.json({
-      ok: true,
+    const successPayload = {
+      ok: true as const,
       data: {
         comparisonId,
         seed: compResult.seed,
@@ -375,7 +382,11 @@ export const POST = withAuth(
         audited,
         ...(persistenceWarning ? { persistenceWarning } : {}),
       },
-    });
+    };
+
+    await recordIdempotency(orgId, idempotencyKey, 200, successPayload);
+
+    return NextResponse.json(successPayload);
   }
 );
 

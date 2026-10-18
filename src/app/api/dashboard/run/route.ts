@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { parseJsonBody } from "@/server/request-guards";
+import { enforceRateLimit, resetRateLimiterOverrides } from "@/server/rate-limiter";
+import { checkIdempotency, recordIdempotency } from "@/server/idempotency";
 import { instrumentsRepo } from "@/server/repositories/instruments";
 import { forecastsRepo, type ForecastRecord } from "@/server/repositories/forecasts";
 import { decisionsRepo, type DecisionRecord } from "@/server/repositories/decisions";
@@ -27,8 +30,10 @@ import {
 import { type Instrument } from "@/engine/models";
 import type { OrgAuthContext } from "@/server/auth";
 
+export const maxDuration = 60;
+
 // ---------------------------------------------------------------------------
-// Rate Limiter / Debouncer
+// Rate Limiter / Debouncer Helper
 // ---------------------------------------------------------------------------
 
 const orgLastRunTime = new Map<string, number>();
@@ -36,6 +41,7 @@ export const MIN_RUN_INTERVAL_MS = 10_000;
 
 export function _resetDashboardRunRateLimiter(): void {
   orgLastRunTime.clear();
+  resetRateLimiterOverrides();
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +55,7 @@ const DashboardRunRequestSchema = z.object({
   alpha: z.number().min(0.001).max(0.5).optional().default(0.01),
   availableCash: MoneyInputSchema.optional(),
   operationalFloor: MoneyInputSchema.optional(),
-});
+}).strict();
 
 /**
  * POST /api/dashboard/run
@@ -65,7 +71,23 @@ export const POST = withAuth(
     const orgId = authContext.orgId;
     const now = Date.now();
 
-    // 1. Rate limiting check (simple per-org minimum interval: 10s)
+    // 1. Idempotency Check
+    const { key: idempotencyKey, response: cachedResponse } = await checkIdempotency(request, orgId);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // 2. Durable Rate Limiting Check (org + user)
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "dashboard.run",
+      orgId,
+      uid: authContext.user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
+    // Also check backwards-compatible 10s debouncing
     const lastRun = orgLastRunTime.get(orgId) ?? 0;
     if (now - lastRun < MIN_RUN_INTERVAL_MS) {
       const remainingMs = MIN_RUN_INTERVAL_MS - (now - lastRun);
@@ -90,28 +112,13 @@ export const POST = withAuth(
       );
     }
 
-    // 2. Parse and validate body
-    let rawBody: unknown = {};
-    try {
-      const text = await request.text();
-      if (text.trim().length > 0) {
-        rawBody = JSON.parse(text);
-      }
-    } catch {
-      return createErrorResponse(400, "VALIDATION_ERROR", "Request body must be valid JSON.");
+    // 3. Request Hardening: Content-Type 415, Max Body 413, Strict Zod validation
+    const bodyResult = await parseJsonBody(request, DashboardRunRequestSchema);
+    if (!bodyResult.success) {
+      return bodyResult.response;
     }
 
-    const parseResult = DashboardRunRequestSchema.safeParse(rawBody);
-    if (!parseResult.success) {
-      return createErrorResponse(
-        400,
-        "VALIDATION_ERROR",
-        "Invalid run parameters.",
-        parseResult.error.issues
-      );
-    }
-
-    const inputData = parseResult.data;
+    const inputData = bodyResult.data;
 
     // 3. Retrieve stored organisation instruments
     const dbInstruments = await instrumentsRepo.list(orgId, { limit: 50 });
@@ -440,10 +447,14 @@ export const POST = withAuth(
         userRole: authContext.role,
       };
 
-      return NextResponse.json({
-        ok: true,
+      const successPayload = {
+        ok: true as const,
         data: payload,
-      });
+      };
+
+      await recordIdempotency(orgId, idempotencyKey, 200, successPayload);
+
+      return NextResponse.json(successPayload);
     } catch (err) {
       console.error("[runDashboardEngineRoute Error]:", err);
       return createErrorResponse(500, "INTERNAL", "An unexpected internal server error occurred.");

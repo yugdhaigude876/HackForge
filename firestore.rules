@@ -92,5 +92,17 @@ service cloud.firestore {
         allow create, update, delete: if false;
       }
     }
+
+    // Limits collection: limits/{limitKey}
+    // Server-written only via Admin SDK for durable rate limiting. All client access denied.
+    match /limits/{limitKey} {
+      allow read, write: if false;
+    }
+
+    // Idempotency collection: idempotency/{idempotencyKey}
+    // Server-written only via Admin SDK for idempotency caching. All client access denied.
+    match /idempotency/{idempotencyKey} {
+      allow read, write: if false;
+    }
   }
 }

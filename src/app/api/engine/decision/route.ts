@@ -36,40 +36,47 @@ import {
 } from "@/engine/reserve";
 import { Money } from "@/engine/money";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { parseJsonBody } from "@/server/request-guards";
+import { enforceRateLimit } from "@/server/rate-limiter";
+import { checkIdempotency, recordIdempotency } from "@/server/idempotency";
 import { type OrgAuthContext } from "@/server/auth";
 import { decisionsRepo } from "@/server/repositories/decisions";
 import { auditRepo } from "@/server/repositories/audit";
 import { canonicalJsonHash } from "@/server/repositories/common";
+
+export const maxDuration = 60;
 
 export const POST = withAuth(
   async function decisionRoute(
     request: NextRequest,
     authContext: OrgAuthContext
   ): Promise<NextResponse> {
+    const orgId = authContext.orgId;
+
+    // 1. Idempotency Check
+    const { key: idempotencyKey, response: cachedResponse } = await checkIdempotency(request, orgId);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // 2. Durable Rate Limiting Check (org + user)
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "engine.decision",
+      orgId,
+      uid: authContext.user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
     try {
-      let rawBody: unknown;
-      try {
-        rawBody = await request.json();
-      } catch {
-        return createErrorResponse(
-          400,
-          "VALIDATION_ERROR",
-          "Invalid JSON in request body",
-          [{ message: "Failed to parse JSON body" }]
-        );
+      // 3. Request Hardening: Content-Type 415, Max Body 413, Strict Zod validation
+      const bodyResult = await parseJsonBody(request, DecisionRequestSchema);
+      if (!bodyResult.success) {
+        return bodyResult.response;
       }
 
-      const parseResult = DecisionRequestSchema.safeParse(rawBody);
-      if (!parseResult.success) {
-        return createErrorResponse(
-          400,
-          "VALIDATION_ERROR",
-          "Validation Error",
-          parseResult.error.issues
-        );
-      }
-
-      const { data } = parseResult;
+      const data = bodyResult.data;
       const currency = data.currency ?? "USD";
       const availableCash = parseMoneyInput(data.availableCash, currency);
       availableCash.assertNonNegative("availableCash must be non-negative");
@@ -277,8 +284,8 @@ export const POST = withAuth(
         audited = false;
       }
 
-      return NextResponse.json({
-        success: true,
+      const successPayload = {
+        success: true as const,
         id: decisionId,
         persisted,
         audited,
@@ -289,7 +296,11 @@ export const POST = withAuth(
                 "Decision evaluated successfully but could not be persisted to the organisation store.",
             }),
         decision,
-      });
+      };
+
+      await recordIdempotency(orgId, idempotencyKey, 200, successPayload);
+
+      return NextResponse.json(successPayload);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Internal server error";

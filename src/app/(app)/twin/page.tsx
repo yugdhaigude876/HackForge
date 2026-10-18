@@ -191,9 +191,9 @@ const PRESETS = [
 export default function DigitalTwinPage() {
   const { user, isMock } = useAuth();
   const isLive = Boolean(user && !isMock);
-  const { role: serverRole } = useOrgRole();
-  const userRole = isLive ? (serverRole ?? "analyst") : "viewer";
-  const canRun = isLive && userRole !== "viewer";
+  const { role: serverRole, loading: isRoleLoading } = useOrgRole();
+  const userRole = isLive ? (serverRole ?? "viewer") : "viewer";
+  const canRun = isLive && !isRoleLoading && Boolean(serverRole) && (userRole === "analyst" || userRole === "admin");
 
   // Scenario Builder state
   const [outflowShockPct, setOutflowShockPct] = useState<number>(25);

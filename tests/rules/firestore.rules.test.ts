@@ -210,4 +210,21 @@ describe("Firestore Security Rules", () => {
     await assertFails(aliceDb.doc("system_settings/config").get());
     await assertFails(aliceDb.doc("unknown_collection/doc_1").set({ foo: "bar" }));
   });
+
+  it("denies all client reads and writes to limits and idempotency collections", async () => {
+    const aliceDb = testEnv.authenticatedContext("alice").firestore();
+    const unauthedDb = testEnv.unauthenticatedContext().firestore();
+
+    // Client read denied
+    await assertFails(aliceDb.doc("limits/rate_limit_key").get());
+    await assertFails(unauthedDb.doc("limits/rate_limit_key").get());
+    await assertFails(aliceDb.doc("idempotency/idempotency_key").get());
+    await assertFails(unauthedDb.doc("idempotency/idempotency_key").get());
+
+    // Client write denied
+    await assertFails(aliceDb.doc("limits/rate_limit_key").set({ count: 1 }));
+    await assertFails(unauthedDb.doc("limits/rate_limit_key").set({ count: 1 }));
+    await assertFails(aliceDb.doc("idempotency/idempotency_key").set({ payload: "spoofed" }));
+    await assertFails(unauthedDb.doc("idempotency/idempotency_key").set({ payload: "spoofed" }));
+  });
 });

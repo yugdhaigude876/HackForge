@@ -27,6 +27,9 @@ import {
 } from "@/engine/forecast";
 import { Money } from "@/engine/money";
 import { withAuth, createErrorResponse } from "@/server/with-auth";
+import { parseJsonBody } from "@/server/request-guards";
+import { enforceRateLimit } from "@/server/rate-limiter";
+import { checkIdempotency, recordIdempotency } from "@/server/idempotency";
 import { type OrgAuthContext } from "@/server/auth";
 import { forecastsRepo } from "@/server/repositories/forecasts";
 import { auditRepo } from "@/server/repositories/audit";
@@ -38,30 +41,32 @@ export const POST = withAuth(
     request: NextRequest,
     authContext: OrgAuthContext
   ): Promise<NextResponse> {
+    const orgId = authContext.orgId;
+
+    // 1. Idempotency Check
+    const { key: idempotencyKey, response: cachedResponse } = await checkIdempotency(request, orgId);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
+    // 2. Durable Rate Limiting Check (org + user)
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "engine.forecast",
+      orgId,
+      uid: authContext.user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
     try {
-      let rawBody: unknown;
-      try {
-        rawBody = await request.json();
-      } catch {
-        return createErrorResponse(
-          400,
-          "VALIDATION_ERROR",
-          "Invalid JSON in request body",
-          [{ message: "Failed to parse JSON body" }]
-        );
+      // 3. Request Hardening: Content-Type 415, Max Body 413, Strict Zod validation
+      const bodyResult = await parseJsonBody(request, ForecastRequestSchema);
+      if (!bodyResult.success) {
+        return bodyResult.response;
       }
 
-      const parseResult = ForecastRequestSchema.safeParse(rawBody);
-      if (!parseResult.success) {
-        return createErrorResponse(
-          400,
-          "VALIDATION_ERROR",
-          "Validation Error",
-          parseResult.error.issues
-        );
-      }
-
-      const { data } = parseResult;
+      const data = bodyResult.data;
       const currency = data.currency ?? "USD";
       const horizonHours = data.horizonHours ?? 24;
       const lookbackHours = data.lookbackHours ?? 168;
@@ -248,8 +253,8 @@ export const POST = withAuth(
         audited = false;
       }
 
-      return NextResponse.json({
-        success: true,
+      const successPayload = {
+        success: true as const,
         id: forecastId,
         persisted,
         audited,
@@ -271,7 +276,11 @@ export const POST = withAuth(
           metrics: backtest.metrics,
           windows: backtest.windows.slice(-5), // Return last 5 windows for concise payload
         },
-      });
+      };
+
+      await recordIdempotency(orgId, idempotencyKey, 200, successPayload);
+
+      return NextResponse.json(successPayload);
     } catch (error) {
       console.error("[forecastRoute Error]:", error);
       return createErrorResponse(
