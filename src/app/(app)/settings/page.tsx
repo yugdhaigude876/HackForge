@@ -5,9 +5,10 @@ import { Badge, Button } from "@/components/ui/primitives";
 import { Panel } from "@/components/finance/panels";
 import { ShieldCheck, User, LogOut, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { TeamAccessPanel } from "@/components/settings/team-access-panel";
 
 export default function SettingsPage() {
-  const { user, isMock, signOut, signInAsDemoUser } = useAuth();
+  const { user, isMock, signOut } = useAuth();
   const router = useRouter();
 
   const handleSignOut = async () => {
@@ -20,12 +21,12 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-foreground">Settings & Security</h1>
-          <p className="text-xs text-muted">Institutional identity, role permissions, and Firebase authentication.</p>
+          <p className="text-xs text-muted">Institutional identity, role permissions, and team access.</p>
         </div>
         {isMock ? (
           <Badge tone="info" className="gap-1">
             <Sparkles className="h-3 w-3" />
-            Mock Auth Active
+            Local Dev Auth
           </Badge>
         ) : (
           <Badge tone="positive" className="gap-1">
@@ -56,7 +57,7 @@ export default function SettingsPage() {
               </div>
               <div className="flex justify-between py-2">
                 <dt className="text-muted">Auth Engine</dt>
-                <dd className="text-foreground">{isMock ? "Mock Dev Provider" : "Firebase Client SDK"}</dd>
+                <dd className="text-foreground">{isMock ? "Local Dev Provider" : "Firebase Client SDK"}</dd>
               </div>
               <div className="flex justify-between py-2">
                 <dt className="text-muted">Session Status</dt>
@@ -76,37 +77,7 @@ export default function SettingsPage() {
           </div>
         </Panel>
 
-        <Panel title="Development & Testing Personas" description="Switch between test accounts instantly.">
-          <p className="text-xs text-muted mb-4">
-            Switching personas updates your session and re-evaluates role-based access rules:
-          </p>
-          <div className="space-y-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start text-xs h-9 bg-surface-2 hover:bg-surface-2/80"
-              onClick={() => signInAsDemoUser("analyst")}
-            >
-              ⚡ Alex Vance — Senior Treasury Analyst
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start text-xs h-9 bg-surface-2 hover:bg-surface-2/80"
-              onClick={() => signInAsDemoUser("risk_officer")}
-            >
-              🛡️ Elena Rostova — Chief Risk Officer
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start text-xs h-9 bg-surface-2 hover:bg-surface-2/80"
-              onClick={() => signInAsDemoUser("cfo")}
-            >
-              💼 Marcus Sterling — Treasury Director & CFO
-            </Button>
-          </div>
-        </Panel>
+        <TeamAccessPanel />
       </div>
     </div>
   );

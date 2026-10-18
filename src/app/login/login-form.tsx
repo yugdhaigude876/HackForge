@@ -17,7 +17,6 @@ import {
   AlertCircle,
   Loader2,
   Sparkles,
-  Zap,
   Layers,
 } from "lucide-react";
 
@@ -102,14 +101,6 @@ export function LoginForm() {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleDemoFillEmail = (demoEmail: string) => {
-    setLocalError(null);
-    clearError();
-    setEmail(demoEmail);
-    setPassword("");
-    setMode("signin");
   };
 
   const activeError = localError || authError;
@@ -437,49 +428,6 @@ export function LoginForm() {
                   </svg>
                   <span>Continue with Google</span>
                 </Button>
-
-                {/* Quick Demo Personas */}
-                <div className="mt-6 rounded-xl border border-border bg-surface-2/60 p-3.5">
-                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
-                    <Zap className="h-3.5 w-3.5 text-accent-gold" />
-                    <span>Demo Persona Emails</span>
-                  </div>
-                  <p className="mt-1 text-[11px] text-muted">
-                    Quick-fill role email for testing (requires password):
-                  </p>
-                  <div className="mt-2.5 grid grid-cols-3 gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDemoFillEmail("analyst@reservejuggler.internal")}
-                      disabled={submitting}
-                      className="text-[11px] h-8 bg-surface hover:bg-surface-raised border-border font-medium"
-                    >
-                      ⚡ Analyst
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDemoFillEmail("risk@reservejuggler.internal")}
-                      disabled={submitting}
-                      className="text-[11px] h-8 bg-surface hover:bg-surface-raised border-border font-medium"
-                    >
-                      🛡️ Risk Officer
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleDemoFillEmail("cfo@reservejuggler.internal")}
-                      disabled={submitting}
-                      className="text-[11px] h-8 bg-surface hover:bg-surface-raised border-border font-medium"
-                    >
-                      💼 Treasury CFO
-                    </Button>
-                  </div>
-                </div>
               </>
             )}
           </GlassCard>

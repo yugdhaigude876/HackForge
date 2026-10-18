@@ -75,6 +75,7 @@ export class JoseTokenVerifier implements TokenVerifier {
     return {
       uid: payload.sub,
       email: typeof payload.email === "string" ? payload.email : null,
+      emailVerified: payload.email_verified === true,
     };
   }
 }

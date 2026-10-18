@@ -19,6 +19,8 @@ export function hasRequiredRole(actualRole: OrgRole, minRole: OrgRole): boolean 
 export interface AuthenticatedUser {
   uid: string;
   email: string | null;
+  /** True when the identity provider verified the email (always true for Google sign-in). */
+  emailVerified?: boolean;
 }
 
 export interface OrgAuthContext {
@@ -115,6 +117,7 @@ export class AdminTokenVerifier implements TokenVerifier {
       return {
         uid: decoded.uid,
         email: decoded.email ?? null,
+          emailVerified: decoded.email_verified === true,
       };
     } catch (err) {
       if (checkRevoked) {
@@ -126,6 +129,7 @@ export class AdminTokenVerifier implements TokenVerifier {
         return {
           uid: decoded.uid,
           email: decoded.email ?? null,
+          emailVerified: decoded.email_verified === true,
         };
       }
       throw err;
@@ -158,6 +162,11 @@ function createDefaultVerifier(): TokenVerifier {
 
 let activeTokenVerifier: TokenVerifier = createDefaultVerifier();
 let activeMembershipStore: MembershipStore = new FirestoreMembershipStore();
+
+/** The membership store currently in use (the Firestore one, or a test double). */
+export function getActiveMembershipStore(): MembershipStore {
+  return activeMembershipStore;
+}
 
 /**
  * Override the token verifier for testing.

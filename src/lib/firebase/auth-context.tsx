@@ -308,8 +308,10 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
       setError(null);
       setLoading(true);
       try {
-        if (isUnconfigured) {
-          throw new Error("Demo personas are disabled in unconfigured production environments.");
+        // Demo accounts exist only for local development without Firebase. With a real Firebase
+        // project (or in an unconfigured production build) every user must be a real account.
+        if (isUnconfigured || !isMock) {
+          throw new Error("Demo accounts are disabled. Sign in with a real account.");
         }
         await new Promise((resolve) => setTimeout(resolve, 150));
         const demoUser = DEMO_USERS[role];
@@ -319,7 +321,7 @@ export function AuthProvider({ children, initialUser, forceMock }: AuthProviderP
         setLoading(false);
       }
     },
-    [isUnconfigured],
+    [isMock, isUnconfigured],
   );
 
   const signOut = useCallback(async () => {

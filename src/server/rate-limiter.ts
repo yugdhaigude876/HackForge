@@ -21,6 +21,9 @@ export const ROUTE_RATE_LIMITS: Record<string, RateLimitConfig> = {
   // Realtime clock: a client driver advances about once per second, so allow headroom.
   "clock.advance": { orgLimit: 180, userLimit: 150, windowMs: 60_000 },
   "clock.control": { orgLimit: 40, userLimit: 30, windowMs: 60_000 },
+  // Access: joining runs once per sign-in; inviting is an admin action.
+  "org.join": { orgLimit: 120, userLimit: 10, windowMs: 60_000 },
+  "org.invite": { orgLimit: 30, userLimit: 15, windowMs: 60_000 },
 };
 
 export interface RateLimitCheckResult {

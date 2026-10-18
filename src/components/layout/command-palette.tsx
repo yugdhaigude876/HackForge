@@ -152,7 +152,7 @@ export function CommandPalette({
                 className="flex items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium cursor-pointer aria-selected:bg-primary aria-selected:text-white transition-colors"
               >
                 <Settings className="h-4 w-4" />
-                <span>System Settings & Personas</span>
+                <span>System Settings</span>
               </Command.Item>
             </Command.Group>
 
