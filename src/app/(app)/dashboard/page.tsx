@@ -310,7 +310,9 @@ export default function DashboardPage() {
     return 0;
   }, [requiredReserveMinor, availableCashMinor]);
 
-  let netYieldMinor = 342_120_00n;
+  const overdraftInterestMinor = activeFrame?.portfolio?.cumulativeOverdraftInterestPaid.amountMinor ?? 0n;
+
+  let netYieldMinor = 0n;
   if (activeFrame?.portfolio) {
     const gross = activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
     const pen = activeFrame.portfolio.cumulativePenaltiesPaid.amountMinor;
@@ -972,8 +974,10 @@ export default function DashboardPage() {
                       <span className="font-mono text-sm font-bold text-[#94A3B8]">$0.00</span>
                     </div>
                     <div className="flex justify-between items-baseline">
-                      <span className="text-xs text-[#94A3B8]">Overdraft Risk Exposure:</span>
-                      <span className="font-mono text-sm font-bold text-[#EF4444]">$1,200,000</span>
+                      <span className="text-xs text-[#94A3B8]">Reserve Held Idle (R):</span>
+                      <span className="font-mono text-sm font-bold text-[#EF4444]">
+                        {formatCurrency(Number(requiredReserveMinor) / 100)}
+                      </span>
                     </div>
                     <div className="flex justify-between items-baseline">
                       <span className="text-xs text-[#94A3B8]">Capital Deployment:</span>
@@ -1001,7 +1005,13 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex justify-between items-baseline">
                       <span className="text-xs text-[#94A3B8]">Overdraft Fees:</span>
-                      <span className="font-mono text-sm font-bold text-[#A3E635]">$0 (Zero Breach)</span>
+                      <span
+                        className={`font-mono text-sm font-bold ${overdraftInterestMinor > 0n ? "text-[#EF4444]" : "text-[#A3E635]"}`}
+                      >
+                        {overdraftInterestMinor > 0n
+                          ? formatCurrency(Number(overdraftInterestMinor) / 100)
+                          : "$0 (Zero Breach)"}
+                      </span>
                     </div>
                     <div className="flex justify-between items-baseline">
                       <span className="text-xs text-[#94A3B8]">Surplus Efficiency:</span>
