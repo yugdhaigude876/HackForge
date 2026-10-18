@@ -20,6 +20,7 @@ import { formatCurrency, formatCompactMinor } from "@/lib/money";
 import { generateAuditCsv } from "@/lib/csv-export";
 import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
 import { ClockControls } from "@/components/dashboard/clock-controls";
+import { useClockControls } from "@/hooks/use-clock";
 import { classifyEvent, ticksToActuals, ticksToReplayResult, type LiveNotification } from "@/lib/live/adapters";
 import { ShieldAlert, Play, Loader2, Database, Activity, RefreshCw } from "lucide-react";
 
@@ -80,6 +81,7 @@ export default function DashboardPage() {
     [live.enabled, live.ticks]
   );
   const streaming = liveReplay !== null;
+  const clockCtl = useClockControls();
 
   useEffect(() => {
     if (isFallback) {
@@ -713,12 +715,29 @@ export default function DashboardPage() {
         >
           <div className="flex items-center gap-2">
             <span className="flex h-2 w-2 rounded-full bg-[#A3E635]" />
-            <h2 className="font-semibold text-[#F8FAFC]">No runs yet</h2>
+            <h2 className="font-semibold text-[#F8FAFC]">{live.enabled ? "Dataset clock not started" : "No runs yet"}</h2>
             <span className="text-[#94A3B8]">
-              Run the engine to create the first automated forecast and Basel III reserve decision for this organisation.
+              {live.enabled
+                ? "Start the clock to stream the official dataset hour by hour; forecasts and reserve decisions appear as it runs."
+                : "Run the engine to create the first automated forecast and Basel III reserve decision for this organisation."}
             </span>
           </div>
-          {canRunEngine && (
+          {live.enabled && clockCtl.canControl && (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void clockCtl.start()}
+              disabled={clockCtl.busy}
+              className="bg-[#A3E635] text-[#0B0E14] font-semibold hover:bg-[#86efac] gap-1.5 border-none h-7 px-2.5 text-xs"
+            >
+              <Play className="h-3 w-3 fill-current" />
+              <span>Start dataset clock</span>
+            </Button>
+          )}
+          {live.enabled && !clockCtl.canControl && (
+            <span className="text-[#94A3B8]">Waiting for an analyst or admin to start it.</span>
+          )}
+          {!live.enabled && canRunEngine && (
             <Button
               type="button"
               size="sm"
