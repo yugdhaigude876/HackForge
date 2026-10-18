@@ -9,6 +9,7 @@ import { ForecastBandChart } from "@/components/finance/forecast-band-chart";
 import { StressSimulatorPanel } from "@/components/finance/stress-simulator-panel";
 import { AllocationDonut } from "@/components/finance/allocation-donut";
 import { DecisionAuditFeed } from "@/components/finance/decision-audit-feed";
+import { TreasuryTimelinePlayer } from "@/components/finance/treasury-timeline-player";
 import {
   DataTable,
   Panel,
@@ -435,6 +436,9 @@ export default function DashboardPage() {
               sample={!isLive}
             />
           </div>
+
+          {/* 4-Tier Treasury Timeline Engine (Official 8,760h Benchmark) */}
+          <TreasuryTimelinePlayer />
 
           {/* Middle Row: Forecast Panel (wide, left) + Stress Panel (right) */}
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">

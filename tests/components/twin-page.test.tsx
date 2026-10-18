@@ -160,7 +160,7 @@ describe("Digital Twin Page (/twin)", () => {
         return {
           ok: true,
           status: 200,
-          data: { userRole: "analyst" } as any,
+          data: { userRole: "analyst" } as unknown as Record<string, unknown>,
         };
       }
       if (endpoint === "/api/instruments") {
@@ -213,7 +213,7 @@ describe("Digital Twin Page (/twin)", () => {
         return {
           ok: true,
           status: 200,
-          data: { userRole: "analyst" } as any,
+          data: { userRole: "analyst" } as unknown as Record<string, unknown>,
         };
       }
       if (endpoint === "/api/simulations/compare" && options?.method === "POST") {
@@ -275,7 +275,7 @@ describe("Digital Twin Page (/twin)", () => {
         return {
           ok: true,
           status: 200,
-          data: { userRole: "analyst" } as any,
+          data: { userRole: "analyst" } as unknown as Record<string, unknown>,
         };
       }
       if (endpoint === "/api/simulations/compare" && options?.method === "POST") {
