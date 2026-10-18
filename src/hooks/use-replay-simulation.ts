@@ -105,6 +105,8 @@ export interface ReplaySimulationParams {
   equityDrawdownShockPct?: number;
   policy?: TimelinePolicy;
   subsampleStep?: number;
+  /** Set false to skip running the replay (for example while the live dataset stream is shown). */
+  enabled?: boolean;
 }
 
 export type ReplayStatus = "loading" | "ready" | "error";
@@ -269,8 +271,10 @@ export function useReplaySimulation(
     isLive,
     refreshToken,
   });
+  const enabled = params.enabled ?? true;
 
   useEffect(() => {
+    if (!enabled) return;
     let isCancelled = false;
     const abortController = new AbortController();
 
@@ -361,7 +365,7 @@ export function useReplaySimulation(
       clearTimeout(timer);
       abortController.abort();
     };
-  }, [paramsKey, isLive]);
+  }, [paramsKey, isLive, enabled]);
 
   return {
     status,

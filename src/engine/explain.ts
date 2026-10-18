@@ -103,7 +103,7 @@ export interface StoredDecisionInput {
   };
   allocations?: StoredAllocationInput[];
   expectedNetYieldMinor?: string;
-  source?: "synthetic" | "import" | "live";
+  source?: "synthetic" | "import" | "live" | "dataset";
 }
 
 export interface InstrumentDefinitionInput {

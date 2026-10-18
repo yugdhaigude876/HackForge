@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Clock,
   Download,
@@ -18,6 +18,52 @@ import {
 import { Button } from "@/components/ui/primitives";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { BrandLogo } from "@/components/brand/logo";
+import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
+import { ticksToNotifications, type LiveNotification } from "@/lib/live/adapters";
+import type { LiveConnection } from "@/lib/live/types";
+
+const NOTIFICATION_LABELS: Record<LiveNotification["type"], string> = {
+  SWEEP: "SWEEP EXECUTED",
+  MATURITY: "REPO MATURITY",
+  LIQUIDATION: "LIQUIDATION CASCADE",
+  OVERDRAFT: "EMERGENCY OVERDRAFT",
+  INFO: "INFO",
+  STATUS: "SOLVENCY STATUS CHANGE",
+};
+
+const NOTIFICATION_STYLES: Record<LiveNotification["type"], string> = {
+  SWEEP: "border-accent-teal/30 bg-accent-teal/10 text-accent-teal",
+  MATURITY: "border-accent-blue/30 bg-accent-blue/10 text-accent-blue",
+  LIQUIDATION: "border-accent-gold/40 bg-accent-gold/10 text-accent-gold",
+  OVERDRAFT: "border-accent-crimson/40 bg-accent-crimson/10 text-accent-crimson",
+  INFO: "border-border bg-surface-2 text-muted",
+  STATUS: "border-accent-gold/40 bg-accent-gold/10 text-accent-gold",
+};
+
+const CONNECTION_STYLES: Record<LiveConnection, { label: string; className: string; dot: string }> = {
+  live: { label: "LIVE", className: "border-accent-teal/35 bg-accent-teal/15 text-accent-teal", dot: "bg-accent-teal animate-pulse" },
+  paused: { label: "PAUSED", className: "border-border bg-surface-2 text-muted", dot: "bg-muted" },
+  completed: { label: "COMPLETED", className: "border-accent-blue/35 bg-accent-blue/15 text-accent-blue", dot: "bg-accent-blue" },
+  connecting: { label: "CONNECTING", className: "border-border bg-surface-2 text-muted", dot: "bg-muted animate-pulse" },
+  offline: { label: "OFFLINE · STALE", className: "border-accent-gold/40 bg-accent-gold/15 text-accent-gold", dot: "bg-accent-gold" },
+  "permission-denied": { label: "NO ACCESS", className: "border-accent-crimson/40 bg-accent-crimson/15 text-accent-crimson", dot: "bg-accent-crimson" },
+  empty: { label: "NO STREAM", className: "border-border bg-surface-2 text-muted", dot: "bg-muted" },
+};
+
+function ConnectionPill({ connection }: { connection: LiveConnection }) {
+  const s = CONNECTION_STYLES[connection];
+  return (
+    <div
+      data-testid="connection-pill"
+      data-connection={connection}
+      className={`hidden md:flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-[10px] font-mono font-bold shadow-sm ${s.className}`}
+      title="Realtime dataset stream connection"
+    >
+      <span className={`h-2 w-2 rounded-full ${s.dot}`} />
+      <span>{s.label}</span>
+    </div>
+  );
+}
 
 export interface TopBarProps {
   clockTimestamp?: string;
@@ -39,6 +85,8 @@ export interface TopBarProps {
   onRunStressTest?: () => void;
   onExportAuditCsv?: () => void;
   onToggleMobileNav?: () => void;
+  /** Overrides the notifications derived from the live stream (used for local sample mode). */
+  notifications?: LiveNotification[];
 }
 
 export function TopBar({
@@ -61,8 +109,14 @@ export function TopBar({
   onRunStressTest,
   onExportAuditCsv,
   onToggleMobileNav,
+  notifications: notificationsProp,
 }: TopBarProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const live = useLiveTreasury();
+  const notifications = useMemo(
+    () => notificationsProp ?? (live.enabled ? ticksToNotifications(live.ticks) : []),
+    [notificationsProp, live.enabled, live.ticks]
+  );
 
   return (
     <>
@@ -177,6 +231,8 @@ export function TopBar({
 
         {/* Right: Master Solvency Badge, Theme Toggle & Audit Drawer */}
         <div className="flex items-center gap-2.5">
+          {live.enabled && <ConnectionPill connection={live.connection} />}
+
           {source === "offline-fallback" && (
             <div
               data-testid="fallback-badge"
@@ -289,7 +345,12 @@ export function TopBar({
             className="relative flex h-8 w-8 items-center justify-center rounded-xl border border-border bg-surface-2 text-muted hover:border-border-strong hover:text-foreground transition-all"
           >
             <Bell className="h-4 w-4" />
-            <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-accent-blue shadow-[0_0_6px_var(--accent-blue)]" />
+            {notifications.length > 0 && (
+              <span
+                data-testid="notification-dot"
+                className="absolute top-1 right-1 h-2 w-2 rounded-full bg-accent-blue shadow-[0_0_6px_var(--accent-blue)]"
+              />
+            )}
           </button>
 
           {/* Theme Toggle */}
@@ -324,36 +385,27 @@ export function TopBar({
               </div>
 
               {/* Event Feed */}
-              <div className="space-y-3 font-mono text-xs">
-                <div className="rounded-xl border border-accent-teal/30 bg-accent-teal/10 p-3 space-y-1">
-                  <div className="flex items-center justify-between text-[11px] text-accent-teal font-semibold">
-                    <span>SWEEP EXECUTED</span>
-                    <span>17:00:00 UTC</span>
-                  </div>
-                  <p className="text-foreground text-[11px] font-sans">
-                    $18,500,000 allocated to Tier 1 Overnight Repo @ 4.29% APY. Zero idle cash drag.
+              <div className="space-y-3 font-mono text-xs" data-testid="notification-list">
+                {notifications.length === 0 ? (
+                  <p className="rounded-xl border border-border bg-surface-2 p-3 font-sans text-[11px] text-muted">
+                    No events yet. Sweeps, maturities, liquidations, overdraft draws and solvency changes appear here as
+                    the dataset clock advances.
                   </p>
-                </div>
-
-                <div className="rounded-xl border border-accent-blue/30 bg-accent-blue/10 p-3 space-y-1">
-                  <div className="flex items-center justify-between text-[11px] text-accent-blue font-semibold">
-                    <span>BASEL III EVALUATION</span>
-                    <span>14:00:00 UTC</span>
-                  </div>
-                  <p className="text-foreground text-[11px] font-sans">
-                    Required reserve $16,500,000 recalculated. 99% Value-at-Risk envelope verified intact.
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-border bg-surface-2 p-3 space-y-1">
-                  <div className="flex items-center justify-between text-[11px] text-muted font-semibold">
-                    <span>REPO MATURITY</span>
-                    <span>08:00:00 UTC</span>
-                  </div>
-                  <p className="text-foreground text-[11px] font-sans">
-                    +$2,450.12 accrued interest returned and settled into Tier 0 Cash Buffer.
-                  </p>
-                </div>
+                ) : (
+                  notifications.map((n) => (
+                    <div
+                      key={n.id}
+                      data-testid="notification-item"
+                      className={`rounded-xl border p-3 space-y-1 ${NOTIFICATION_STYLES[n.type]}`}
+                    >
+                      <div className="flex items-center justify-between text-[11px] font-semibold">
+                        <span>{NOTIFICATION_LABELS[n.type]}</span>
+                        <span>{n.timestamp.slice(0, 16).replace("T", " ")} UTC</span>
+                      </div>
+                      <p className="text-foreground text-[11px] font-sans">{n.message}</p>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 

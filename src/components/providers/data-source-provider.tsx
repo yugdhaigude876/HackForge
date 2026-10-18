@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, type ReactNode } from "react";
 
-export type DataSource = "live" | "synthetic" | "offline-fallback" | "demo";
+export type DataSource = "live" | "synthetic" | "offline-fallback" | "demo" | "dataset";
 
 interface DataSourceContextValue {
   source: DataSource | null;

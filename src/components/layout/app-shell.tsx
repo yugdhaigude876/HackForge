@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/primitives";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Sidebar } from "./sidebar";
 import { CommandPalette } from "./command-palette";
+import { ClockDriver } from "./clock-driver";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -75,6 +76,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <ClockDriver />
     </div>
   );
 }

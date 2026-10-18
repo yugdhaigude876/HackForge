@@ -20,6 +20,7 @@ export type ApiErrorCode =
   | "VALIDATION_ERROR"
   | "INTERNAL"
   | "NOT_FOUND"
+  | "CONFLICT"
   | "RATE_LIMITED";
 
 export interface ApiErrorPayload {

@@ -91,6 +91,25 @@ service cloud.firestore {
         // No client (even org admins) may create, update, or delete audit records.
         allow create, update, delete: if false;
       }
+
+      // Realtime clock: orgs/{orgId}/clock/state. Members subscribe to see the dataset clock.
+      // Only the server (Admin SDK) advances it.
+      match /clock/{docId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if false;
+      }
+
+      // Streamed dataset hours: orgs/{orgId}/stream/{hourId}. One document per applied hour with
+      // the treasury snapshot, reserve decision, forecast and events. Server-written only.
+      match /stream/{hourId} {
+        allow read: if isOrgMember(orgId);
+        allow write: if false;
+      }
+
+      // Engine state: orgs/{orgId}/engine/state. Server-only. No client read or write.
+      match /engine/{docId} {
+        allow read, write: if false;
+      }
     }
 
     // Limits collection: limits/{limitKey}

@@ -18,6 +18,9 @@ import { Button } from "@/components/ui/primitives";
 import { sampleBalances, sampleNetFlow } from "@/lib/sample-data";
 import { formatCurrency, formatCompactMinor } from "@/lib/money";
 import { generateAuditCsv } from "@/lib/csv-export";
+import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
+import { ClockControls } from "@/components/dashboard/clock-controls";
+import { classifyEvent, ticksToActuals, ticksToReplayResult, type LiveNotification } from "@/lib/live/adapters";
 import { ShieldAlert, Play, Loader2, Database, Activity, RefreshCw } from "lucide-react";
 
 const sampleForecastPredictions = [
@@ -70,15 +73,25 @@ export default function DashboardPage() {
   const liveDecision = data?.decision ?? null;
   const liveForecast = data?.forecast ?? null;
 
+  // Realtime dataset stream (signed-in users). When ticks exist, every panel reads from them.
+  const live = useLiveTreasury();
+  const liveReplay = useMemo(
+    () => (live.enabled ? ticksToReplayResult(live.ticks) : null),
+    [live.enabled, live.ticks]
+  );
+  const streaming = liveReplay !== null;
+
   useEffect(() => {
     if (isFallback) {
       setSource("offline-fallback");
+    } else if (streaming) {
+      setSource("dataset");
     } else if (isLive && liveDecision?.source) {
       setSource(liveDecision.source as DataSource);
     } else {
       setSource(null);
     }
-  }, [isFallback, isLive, liveDecision?.source, setSource]);
+  }, [isFallback, streaming, isLive, liveDecision?.source, setSource]);
 
   // Replay control states
   const [userReplayHour, setUserReplayHour] = useState<number | null>(null);
@@ -92,7 +105,7 @@ export default function DashboardPage() {
   // Hook-based replay simulation: debounced, cancellable, dual-mode
   const {
     status: replayStatus,
-    result: simResult,
+    result: replayResult,
     error: replayError,
     source: replaySource,
     refresh: refreshReplay,
@@ -105,7 +118,11 @@ export default function DashboardPage() {
     settlementLagHours: settlementDelayHours,
     rateShiftBps: rateSpikeActive ? 200 : 0,
     subsampleStep: 1,
+    enabled: !streaming,
   });
+
+  // Single source of truth for all telemetry panels: the live stream when present, else the replay.
+  const simResult = streaming ? liveReplay : replayResult;
 
   // Calculate first sweep and first liquidation hours from real simulation
   const firstSweepHour = useMemo<number | null>(() => {
@@ -134,7 +151,13 @@ export default function DashboardPage() {
   }, [simResult]);
 
   // Default replayHour to first meaningful activity (first frame where funds hold in tiers 1-3 or first SWEEP)
-  const replayHour = userReplayHour ?? firstSweepHour ?? 0;
+  // While streaming, follow the latest streamed hour unless the user pinned an earlier one.
+  const latestStreamHour =
+    streaming && liveReplay ? liveReplay.frames[liveReplay.frames.length - 1].hour : null;
+  const replayHour = streaming
+    ? (userReplayHour ?? latestStreamHour ?? 0)
+    : (userReplayHour ?? firstSweepHour ?? 0);
+  const followingLive = streaming && userReplayHour === null;
   const setReplayHour = useCallback(
     (val: number | ((prev: number) => number)) => {
       setUserReplayHour((current) => {
@@ -241,7 +264,9 @@ export default function DashboardPage() {
   // Real repo matured yield calculation at 08:00 (delta from previous hour)
   const repoMaturedYieldUsd = useMemo<number | null>(() => {
     if (clockHourOfDay !== 8 || !activeFrame || !simResult?.frames) return null;
-    const currentIdx = Math.min(Math.max(0, replayHour), simResult.frames.length - 1);
+    const exactIdx = simResult.frames.findIndex((f) => f.hour === replayHour);
+    const currentIdx =
+      exactIdx >= 0 ? exactIdx : Math.min(Math.max(0, replayHour), simResult.frames.length - 1);
     if (currentIdx === 0) {
       const earned = activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
       return Number(earned) / 100;
@@ -458,6 +483,22 @@ export default function DashboardPage() {
       }));
   }, [simResult, replayHour]);
 
+  // Notifications for the top bar when no live stream exists: real events from the local replay
+  const replayNotifications = useMemo<LiveNotification[]>(() => {
+    if (!simResult?.auditLogs) return [];
+    return simResult.auditLogs
+      .filter((log) => log.hour <= replayHour)
+      .slice(-30)
+      .reverse()
+      .map((log, idx) => ({
+        id: `replay-${log.hour}-${idx}`,
+        hourIndex: log.hour,
+        timestamp: log.timestamp,
+        type: classifyEvent(log.message),
+        message: log.message,
+      }));
+  }, [simResult, replayHour]);
+
   // Real CSV export using RFC 4180 escaping
   const handleExportAuditCsv = useCallback(() => {
     if (!simResult) return;
@@ -481,6 +522,17 @@ export default function DashboardPage() {
           className="rounded bg-amber-500/20 px-2.5 py-1 font-mono text-[11px] font-bold text-amber-400 border border-amber-500/40"
         >
           Offline fallback
+        </span>
+      );
+    }
+
+    if (streaming) {
+      return (
+        <span
+          data-testid="dataset-stream-badge"
+          className="rounded bg-[#22C55E]/15 px-2.5 py-1 font-mono text-[11px] font-bold text-[#22C55E] border border-[#22C55E]/30"
+        >
+          Official dataset (streamed)
         </span>
       );
     }
@@ -538,16 +590,23 @@ export default function DashboardPage() {
         repoMaturedYieldUsd={repoMaturedYieldUsd}
         isPlaying={isPlaying}
         playbackSpeed={playbackSpeed}
-        onPlayToggle={handlePlayToggle}
-        onStepHour={handleStepHour}
-        onSpeedChange={(s) => setPlaybackSpeed(s)}
-        source={isFallback ? "offline-fallback" : (liveDecision?.source || replaySource)}
+        onPlayToggle={streaming ? undefined : handlePlayToggle}
+        onStepHour={streaming ? undefined : handleStepHour}
+        onSpeedChange={streaming ? undefined : (s) => setPlaybackSpeed(s)}
+        notifications={streaming ? undefined : replayNotifications}
+        source={isFallback ? "offline-fallback" : streaming ? "dataset" : (liveDecision?.source || replaySource)}
         solvencyStatus={activeFrame?.liquidityStatus ?? (isLive && liveDecision ? (liveDecision.status as "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED") : "HEALTHY")}
-        mase={isLive ? (liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? null) : 0.85}
-        confidence={liveDecision?.confidence ?? 0.99}
+        mase={
+          streaming
+            ? (live.latest?.accuracy.mase ?? null)
+            : isLive
+            ? (liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? null)
+            : 0.85
+        }
+        confidence={streaming ? (live.latest?.confidence ?? 0.99) : (liveDecision?.confidence ?? 0.99)}
         deficitAmountUsd={deficitAmountUsd}
-        onTriggerSweep={handleTriggerSweep}
-        onRunStressTest={handleRunStressTest}
+        onTriggerSweep={streaming ? undefined : handleTriggerSweep}
+        onRunStressTest={streaming ? undefined : handleRunStressTest}
         onExportAuditCsv={handleExportAuditCsv}
       />
 
@@ -597,6 +656,9 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* Realtime dataset clock controls (signed-in sessions only) */}
+      {live.enabled && <ClockControls />}
+
       {/* Mock Mode Notice Banner */}
       {!isLive && (
         <div
@@ -644,7 +706,7 @@ export default function DashboardPage() {
       )}
 
       {/* "No runs yet" Small Alert Banner (renders ABOVE workstation, not replacing it) */}
-      {dashboardStatus === "empty" && (
+      {dashboardStatus === "empty" && !streaming && (
         <div
           data-testid="dashboard-empty"
           className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#A3E635]/30 bg-[#A3E635]/10 px-4 py-2.5 text-xs text-[#F8FAFC]"
@@ -762,8 +824,24 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between px-1 text-[11px] font-mono text-[#94A3B8]">
               <div className="flex items-center gap-1.5">
                 <Activity className="h-3.5 w-3.5 text-[#A3E635]" />
-                <span className="font-semibold text-[#F8FAFC]">Active Replay Telemetry</span>
-                <span>(Panel Source: Replay Frame H{replayHour} · {replaySource === "live-api" ? "Live API" : "Local Engine"})</span>
+                <span className="font-semibold text-[#F8FAFC]">
+                  {streaming ? "Live Dataset Telemetry" : "Active Replay Telemetry"}
+                </span>
+                <span>
+                  {streaming
+                    ? `(Panel Source: Streamed Frame H${replayHour} · Official dataset${followingLive ? " · following live" : " · pinned"})`
+                    : `(Panel Source: Replay Frame H${replayHour} · ${replaySource === "live-api" ? "Live API" : "Local Engine"})`}
+                </span>
+                {streaming && !followingLive && (
+                  <button
+                    type="button"
+                    data-testid="back-to-live"
+                    onClick={() => setUserReplayHour(null)}
+                    className="ml-2 rounded border border-[#22C55E]/40 px-2 py-0.5 text-[10px] font-bold text-[#22C55E] hover:bg-[#22C55E]/10"
+                  >
+                    Back to live
+                  </button>
+                )}
               </div>
               <div>Timestamp: {clockTimestamp}</div>
             </div>
@@ -783,7 +861,12 @@ export default function DashboardPage() {
               {/* Left: Net Flow & VaR Chart */}
               <ForecastChart
                 history={
-                  isLive
+                  streaming
+                    ? ticksToActuals(live.ticks, 24).map((a, idx) => ({
+                        hour: idx,
+                        net: Number(a.netMinor),
+                      }))
+                    : isLive
                     ? (data?.actuals ?? []).map((a, idx) => ({
                         hour: idx,
                         net: Number(a.netMinor),
@@ -794,7 +877,14 @@ export default function DashboardPage() {
                       }))
                 }
                 predictions={
-                  isLive && liveForecast?.points && liveForecast.points.length > 0
+                  streaming && live.latest && live.latest.forecast.points.length > 0
+                    ? live.latest.forecast.points.map((p, idx) => ({
+                        hour: idx + 1,
+                        mean: Number(p.meanMinor),
+                        bandLower: p.bandLowerMinor ? Number(p.bandLowerMinor) : undefined,
+                        bandUpper: p.bandUpperMinor ? Number(p.bandUpperMinor) : undefined,
+                      }))
+                    : isLive && liveForecast?.points && liveForecast.points.length > 0
                     ? liveForecast.points.map((p, idx) => ({
                         hour: idx + 1,
                         mean: Number(p.meanMinor),
@@ -804,7 +894,9 @@ export default function DashboardPage() {
                     : sampleForecastPredictions
                 }
                 mase={
-                  isLive
+                  streaming
+                    ? (live.latest?.accuracy.mase ?? null)
+                    : isLive
                     ? (liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? null)
                     : 0.85
                 }

@@ -29,10 +29,12 @@ import {
   Tooltip,
 } from "recharts";
 import { sampleNetFlow } from "@/lib/sample-data";
+import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
+import { tickToForecastAnalytics, ticksToForecastChart, type ForecastChartPoint } from "@/lib/live/adapters";
 
 interface ForecastAnalyticsData {
   forecastId: string | null;
-  source: "synthetic" | "import" | "live" | "offline-fallback" | null;
+  source: "synthetic" | "import" | "live" | "offline-fallback" | "dataset" | null;
   asOf: string | null;
   seed: string | number | null;
   method: string | null;
@@ -153,12 +155,24 @@ const OFFLINE_FALLBACK_FORECAST_DATA: ForecastAnalyticsData = {
 export default function ForecastPage() {
   const { user, isMock } = useAuth();
   const { setSource } = useDataSource();
-  const [data, setData] = useState<ForecastAnalyticsData | null>(SEEDED_FORECAST_DATA);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Realtime dataset stream: when ticks exist, the page shows the latest streamed hour.
+  const live = useLiveTreasury();
+  const liveAnalytics = useMemo(
+    () => (live.enabled && live.latest ? tickToForecastAnalytics(live.latest) : null),
+    [live.enabled, live.latest]
+  );
+  const streamingForecast = liveAnalytics !== null;
+
+  const [fetchedData, setData] = useState<ForecastAnalyticsData | null>(SEEDED_FORECAST_DATA);
+  const data: ForecastAnalyticsData | null = liveAnalytics ?? fetchedData;
+  const [isLoadingState, setIsLoading] = useState(false);
+  const isLoading = isLoadingState && !streamingForecast;
+  const [errorState, setError] = useState<string | null>(null);
+  const error = streamingForecast ? null : errorState;
   const [errorStatus, setErrorStatus] = useState<number | null>(null);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
-  const [isFallback, setIsFallback] = useState(false);
+  const [isFallbackState, setIsFallback] = useState(false);
+  const isFallback = isFallbackState && !streamingForecast;
   const [fallbackRequestId, setFallbackRequestId] = useState<string | null>(null);
 
   const isLive = Boolean(user && !isMock);
@@ -167,6 +181,8 @@ export default function ForecastPage() {
   useEffect(() => {
     if (isFallback) {
       setSource("offline-fallback");
+    } else if (streamingForecast) {
+      setSource("dataset");
     } else if (isLive && data?.source) {
       setSource(data.source === "import" ? "live" : data.source);
     } else {
@@ -282,7 +298,8 @@ export default function ForecastPage() {
   }, [isLive]);
 
   // Chart data: Sample fallback or generated synthetic series
-  const chartData = useMemo(() => {
+  const chartData = useMemo<ForecastChartPoint[]>(() => {
+    if (streamingForecast) return ticksToForecastChart(live.ticks);
     return sampleNetFlow.slice(0, 24).map((pt, idx) => {
       const net = pt.net / 100;
       const lower = net - 45000;
@@ -292,17 +309,24 @@ export default function ForecastPage() {
         mean: net,
         bandLower: lower,
         bandUpper: upper,
-        bandRange: [lower, upper],
+        bandRange: [lower, upper] as [number, number],
         actual: idx < 12 ? net + (Math.sin(idx) * 15000) : null,
       };
     });
-  }, []);
+  }, [streamingForecast, live.ticks]);
 
   const renderSourceBadge = () => {
     if (isFallback || data?.source === "offline-fallback") {
       return (
         <Badge tone="warning" data-testid="fallback-badge">
           Offline fallback
+        </Badge>
+      );
+    }
+    if (streamingForecast) {
+      return (
+        <Badge tone="positive" data-testid="dataset-stream-badge">
+          Official dataset (streamed)
         </Badge>
       );
     }
@@ -557,6 +581,18 @@ export default function ForecastPage() {
                     fillOpacity={0.15}
                     name="90% Residual Band"
                   />
+                  {/* Actual net flow (streamed hours) */}
+                  {streamingForecast && (
+                    <Line
+                      type="monotone"
+                      dataKey="actual"
+                      stroke="var(--text-secondary)"
+                      strokeWidth={1.5}
+                      dot={false}
+                      connectNulls={false}
+                      name="Actual Net Flow"
+                    />
+                  )}
                   {/* Mean Forecast line */}
                   <Line
                     type="monotone"

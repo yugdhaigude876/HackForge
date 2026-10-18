@@ -1,21 +1,39 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { apiFetch } from "@/lib/api-client";
+import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
+import { ticksToDashboardPayload } from "@/lib/live/adapters";
 import type {
   DashboardSummaryPayload as ServerDashboardSummaryPayload,
   SerializedDecision,
   SerializedForecast,
 } from "@/app/api/dashboard/summary/route";
 
-/** Source labels the client can show. "offline-fallback" never comes from the server. */
-export type ClientDataSource = NonNullable<SerializedDecision["source"]> | "offline-fallback";
+/**
+ * Source labels the client can show. "offline-fallback" and "dataset" (the realtime stream built
+ * from the official dataset) never come from the summary endpoint.
+ */
+export type ClientDataSource = NonNullable<SerializedDecision["source"]> | "offline-fallback" | "dataset";
 
-/** Server payload with the client-only "offline-fallback" source label allowed. */
+/**
+ * Server payload with the client-only source labels allowed. Forecast accuracy values are
+ * nullable because the realtime stream reports null until enough hours are scored.
+ */
 export type DashboardSummaryPayload = Omit<ServerDashboardSummaryPayload, "decision" | "forecast"> & {
   decision: (Omit<SerializedDecision, "source"> & { source?: ClientDataSource }) | null;
-  forecast: (Omit<SerializedForecast, "source"> & { source?: ClientDataSource }) | null;
+  forecast:
+    | (Omit<SerializedForecast, "source" | "backtest"> & {
+        source?: ClientDataSource;
+        backtest: {
+          mase: number | null;
+          pinball: number | null;
+          skillVsBaseline?: number;
+          sampleSize?: number;
+        };
+      })
+    | null;
 };
 
 export type DashboardStatus =
@@ -150,6 +168,7 @@ export const OFFLINE_FALLBACK_DASHBOARD_PAYLOAD: DashboardSummaryPayload = {
 
 export function useDashboardData(): UseDashboardDataResult {
   const { user, isMock } = useAuth();
+  const live = useLiveTreasury();
   const [internalStatus, setInternalStatus] = useState<DashboardStatus>("loading");
   const [data, setData] = useState<DashboardSummaryPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -358,6 +377,30 @@ export function useDashboardData(): UseDashboardDataResult {
     },
     [isLive]
   );
+
+  // When the realtime dataset stream has produced hours, every page that reads this hook
+  // (Dashboard, Reserve, Optimizer, ...) shows the latest streamed hour and updates live.
+  const streamPayload = useMemo(
+    () =>
+      live.enabled
+        ? ticksToDashboardPayload(live.ticks, live.orgId, currentData?.userRole ?? "viewer")
+        : null,
+    [live.enabled, live.ticks, live.orgId, currentData?.userRole]
+  );
+
+  if (streamPayload) {
+    return {
+      status: "ready",
+      data: streamPayload,
+      error: null,
+      retryAfterSeconds,
+      isFallback: false,
+      fallbackRequestId: null,
+      refresh: fetchSummary,
+      run,
+      isRunning,
+    };
+  }
 
   return {
     status,

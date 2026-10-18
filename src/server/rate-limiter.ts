@@ -18,6 +18,9 @@ export const ROUTE_RATE_LIMITS: Record<string, RateLimitConfig> = {
   "engine.generate": { orgLimit: 30, userLimit: 15, windowMs: 60_000 },
   "engine.forecast": { orgLimit: 30, userLimit: 15, windowMs: 60_000 },
   "engine.decision": { orgLimit: 30, userLimit: 15, windowMs: 60_000 },
+  // Realtime clock: a client driver advances about once per second, so allow headroom.
+  "clock.advance": { orgLimit: 180, userLimit: 150, windowMs: 60_000 },
+  "clock.control": { orgLimit: 40, userLimit: 30, windowMs: 60_000 },
 };
 
 export interface RateLimitCheckResult {

@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useLiveTreasury } from "@/components/providers/live-treasury-provider";
+import { ticksToNotifications } from "@/lib/live/adapters";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { apiFetch } from "@/lib/api-client";
 import { Panel, DataTable, type Column, LoadingState, ErrorState, EmptyState } from "@/components/finance/panels";
@@ -96,13 +98,22 @@ export default function AuditTrailPage() {
 
   const isLive = Boolean(user && !isMock);
 
+  // Realtime dataset events, newest first
+  const live = useLiveTreasury();
+  const liveEvents = useMemo(
+    () => (live.enabled ? ticksToNotifications(live.ticks, 100) : []),
+    [live.enabled, live.ticks]
+  );
+
   useEffect(() => {
     if (isFallback) {
       setSource("offline-fallback");
+    } else if (live.enabled && live.latest) {
+      setSource("dataset");
     } else {
       setSource(null);
     }
-  }, [isFallback, setSource]);
+  }, [isFallback, live.enabled, live.latest, setSource]);
 
   const handleFetchResult = (res: { ok: boolean; status: number; data?: DecisionRecord[]; error?: { message?: string }; requestId?: string }) => {
     if (res.ok && res.data) {
@@ -279,6 +290,44 @@ export default function AuditTrailPage() {
             real account to record and inspect immutable audit entries.
           </p>
         </div>
+      )}
+
+      {live.enabled && (
+        <Panel
+          title="Live Dataset Events"
+          description="Sweeps, maturities, liquidations, overdraft draws and solvency changes as the dataset clock advances. Newest first."
+        >
+          {liveEvents.length === 0 ? (
+            <EmptyState
+              title="No events yet"
+              message={
+                live.connection === "permission-denied"
+                  ? "You do not have access to this organisation's stream."
+                  : live.connection === "offline"
+                  ? "Connection lost. Showing the last known state."
+                  : "Start the dataset clock from the dashboard. Events appear here as hours are applied."
+              }
+            />
+          ) : (
+            <ul data-testid="live-events" className="divide-y divide-border">
+              {liveEvents.map((e) => (
+                <li
+                  key={e.id}
+                  data-testid="live-event"
+                  className={`flex flex-wrap items-start gap-x-3 gap-y-1 py-2 text-xs ${
+                    live.latest && e.hourIndex === live.latest.hourIndex ? "bg-primary/5" : ""
+                  }`}
+                >
+                  <span className="font-mono text-muted tabular-nums">{e.timestamp.slice(0, 16).replace("T", " ")} UTC</span>
+                  <Badge tone={e.type === "OVERDRAFT" || e.type === "LIQUIDATION" || e.type === "STATUS" ? "warning" : "info"}>
+                    {e.type}
+                  </Badge>
+                  <span className="min-w-0 flex-1 text-foreground">{e.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
       )}
 
       <Panel
