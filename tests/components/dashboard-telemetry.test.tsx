@@ -7,6 +7,7 @@ import { AuthProvider } from "@/lib/firebase/auth-context";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import * as dashboardHookModule from "@/hooks/use-dashboard-data";
 import * as replayHookModule from "@/hooks/use-replay-simulation";
+import { Money } from "@/engine/money";
 
 // Mock Recharts ResponsiveContainer to avoid size computation issues in JSDOM
 vi.mock("recharts", async () => {
@@ -129,10 +130,10 @@ describe("Dashboard Telemetry & Replay Workstation", () => {
           {
             tierId: "tier1_repo",
             tierName: "Tier 1: Overnight Repo",
-            grossLiquidated: { currency: "USD", amountMinor: 5_000_000_00n } as any,
+            grossLiquidated: Money.fromMinor(5_000_000_00n, "USD"),
             haircutRatePct: 0.5,
-            penaltyPaid: { currency: "USD", amountMinor: 500_00n } as any,
-            netRecoveredCash: { currency: "USD", amountMinor: 4_999_500_00n } as any,
+            penaltyPaid: Money.fromMinor(500_00n, "USD"),
+            netRecoveredCash: Money.fromMinor(4_999_500_00n, "USD"),
             settlementLagHours: 0,
           },
         ],
