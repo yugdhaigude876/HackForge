@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/brand/banner.png" alt="Reserve Juggler logo: three orbs juggled in an infinity loop above two open hands" width="640" />
+</p>
+
 # Reserve Juggler (HackForge)
 
 > **Autonomous Liquidity Reserve Forecasting & Surplus Cash Optimisation** for digital banks and corporate treasuries.

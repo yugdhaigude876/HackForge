@@ -31,39 +31,39 @@ export default function OptimizerPage() {
     status: "HEALTHY",
     confidence: 0.95,
     horizonHours: 24,
-    reserveMinor: "2100000000",
-    surplusMinor: "2850000000", // $28.5M surplus
-    availableCashMinor: "6240000000",
+    reserveMinor: "1650000000", // $16.5M reserve
+    surplusMinor: "3350000000", // $33.5M surplus
+    availableCashMinor: "5000000000", // $50M available cash
     allocations: [
       {
-        instrumentId: "overnight-repo",
-        name: "Overnight Treasury Repo",
-        amountMinor: "1500000000", // $15M
-        annualRateBps: 520,
+        instrumentId: "tier1_repo",
+        name: "Tier 1: Overnight Repo",
+        amountMinor: "1850000000", // $18.5M
+        annualRateBps: 429,
         settlementLagHours: 0,
-        penaltyBps: 0,
+        penaltyBps: 50,
         capacityMinor: "2500000000",
         earlyWithdrawalRisk: 0.0,
       },
       {
-        instrumentId: "30d-tbill-mmf",
-        name: "30-Day T-Bill MMF",
-        amountMinor: "1350000000", // $13.5M
-        annualRateBps: 485,
-        settlementLagHours: 2,
-        penaltyBps: 15,
+        instrumentId: "tier2_bonds",
+        name: "Tier 2: 2Y Sovereign Bonds",
+        amountMinor: "1000000000", // $10.0M
+        annualRateBps: 480,
+        settlementLagHours: 0,
+        penaltyBps: 200,
         capacityMinor: "1500000000",
         earlyWithdrawalRisk: 0.05,
       },
       {
-        instrumentId: "7d-term-deposit",
-        name: "7-Day Term Deposit",
-        amountMinor: "0",
-        annualRateBps: 420,
-        settlementLagHours: 24,
-        penaltyBps: 50,
+        instrumentId: "tier3_equities",
+        name: "Tier 3: Growth Equities",
+        amountMinor: "500000000", // $5.0M
+        annualRateBps: 1000,
+        settlementLagHours: 0,
+        penaltyBps: 1500,
         capacityMinor: "1000000000",
-        earlyWithdrawalRisk: 0.10,
+        earlyWithdrawalRisk: 0.15,
       },
     ],
     source: "synthetic" as const,
@@ -91,7 +91,7 @@ export default function OptimizerPage() {
         penaltyBps: a.penaltyBps,
         capacityMinor: a.capacityMinor,
       })),
-      source: d.source,
+      source: d.source === "offline-fallback" ? undefined : d.source,
     };
   }, [isLive, dashboardData, sampleDecision]);
 
@@ -309,7 +309,15 @@ export default function OptimizerPage() {
                 <tr key={inst.instrumentId} className={inst.funded ? "bg-primary/5" : ""}>
                   <td className="py-3 px-4 font-semibold text-foreground flex items-center gap-2">
                     <div className={`h-2 w-2 rounded-full ${inst.funded ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
-                    <span>{inst.name}</span>
+                    <div>
+                      <div>{inst.name}</div>
+                      {inst.instrumentId === "tier1_repo" && (
+                        <div className="text-[10px] text-muted-foreground font-normal">Overnight Treasury Repo</div>
+                      )}
+                      {inst.instrumentId === "tier2_bonds" && (
+                        <div className="text-[10px] text-muted-foreground font-normal">30-Day T-Bill MMF</div>
+                      )}
+                    </div>
                   </td>
                   <td className="py-3 px-4 font-mono font-medium">
                     {inst.annualRateFormatted}

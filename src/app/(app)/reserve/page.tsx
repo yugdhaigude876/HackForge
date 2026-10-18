@@ -74,7 +74,7 @@ export default function ReservePage() {
       worstCaseResidualShortfallMinor: d.worstCaseResidualShortfallMinor,
       backtest: d.backtest ? { mase: d.backtest.mase, sampleSize: d.backtest.sampleSize } : undefined,
       allocations: d.allocations,
-      source: d.source,
+      source: d.source === "offline-fallback" ? undefined : d.source,
     };
   }, [isLive, dashboardData, sampleDecision]);
 

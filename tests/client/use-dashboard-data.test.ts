@@ -135,7 +135,7 @@ describe("useDashboardData Hook", () => {
     expect(result.current.data?.decision).toBeNull();
   });
 
-  it("sets 'error' state when summary fetch fails", async () => {
+  it("sets 'error' state when summary fetch fails with 429 rate limit", async () => {
     vi.spyOn(authContextModule, "useAuth").mockReturnValue({
       user: { uid: "user-1", email: "u@b.com", displayName: "User" },
       isMock: false,
@@ -153,8 +153,8 @@ describe("useDashboardData Hook", () => {
 
     vi.spyOn(apiClientModule, "apiFetch").mockResolvedValue({
       ok: false,
-      error: { code: "INTERNAL", message: "Failed to connect" },
-      status: 500,
+      error: { code: "RATE_LIMITED", message: "Rate limit exceeded" },
+      status: 429,
     });
 
     const { result } = renderHook(() => useDashboardData());
@@ -163,7 +163,41 @@ describe("useDashboardData Hook", () => {
       expect(result.current.status).toBe("error");
     });
 
-    expect(result.current.error).toBe("Failed to connect");
+    expect(result.current.error).toContain("Rate limit");
+  });
+
+  it("activates honest offline fallback when summary fetch fails with 500", async () => {
+    vi.spyOn(authContextModule, "useAuth").mockReturnValue({
+      user: { uid: "user-1", email: "u@b.com", displayName: "User" },
+      isMock: false,
+      isUnconfigured: false,
+      loading: false,
+      error: null,
+      getIdToken: vi.fn().mockResolvedValue("token"),
+      signInWithEmail: vi.fn(),
+      signUpWithEmail: vi.fn(),
+      signInWithGoogle: vi.fn(),
+      signInAsDemoUser: vi.fn(),
+      signOut: vi.fn(),
+      clearError: vi.fn(),
+    });
+
+    vi.spyOn(apiClientModule, "apiFetch").mockResolvedValue({
+      ok: false,
+      error: { code: "INTERNAL", message: "Database connection failed" },
+      status: 500,
+      requestId: "req-dash-500",
+    });
+
+    const { result } = renderHook(() => useDashboardData());
+
+    await waitFor(() => {
+      expect(result.current.isFallback).toBe(true);
+    });
+
+    expect(result.current.status).toBe("ready");
+    expect(result.current.data?.decision?.source).toBe("offline-fallback");
+    expect(result.current.fallbackRequestId).toBe("req-dash-500");
   });
 
   it("run() calls POST /api/dashboard/run and updates state to ready on success", async () => {

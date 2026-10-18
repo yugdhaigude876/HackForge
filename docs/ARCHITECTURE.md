@@ -290,7 +290,33 @@ Clients can supply an optional `Idempotency-Key` header (`^[A-Za-z0-9_-]{1,128}$
 
 ### Health & Readiness Endpoints
 - **`GET /api/health`**: Public, unauthenticated. Returns `{ ok: true, version: "0.2.0", time: "..." }`. Never echoes credentials, environment variables, or dependency details.
-- **`GET /api/ready`**: Public, unauthenticated. Probes Firebase Admin Firestore connectivity via read latency check. Returns `HTTP 200 { ok: true, status: "ready", latencyMs }` or `HTTP 503 { ok: false, status: "degraded" }` without leaking error traces.
+- **`GET /api/ready`**: Public, unauthenticated. Probes Firebase Admin Firestore connectivity via dynamic runtime imports inside try/catch blocks. Returns `HTTP 200 { ok: true, status: "ready", latencyMs }` or `HTTP 503 { ok: false, status: "degraded" }` without leaking error traces. Never throws 500 on module load failure.
+
+### Serverless Module Load Architecture & Vercel 500 Prevention
+1. **Server External Packages**: `firebase-admin` and `@google-cloud/firestore` are configured in `next.config.ts` under `serverExternalPackages`. This prevents Turbopack and Webpack from attempting to bundle native Node.js binaries, C++ add-ons (`@grpc/grpc-js`), or non-analyzable dynamic requires into serverless chunks.
+2. **Lazy Initialization via CommonJS Require**: In `src/server/firebase-admin.ts`, `firebase-admin` is imported lazily on demand inside `getAdminApp()` using `createRequire(import.meta.url)`. Static top-level evaluation of Firestore modules is eliminated, preventing module-load crashes across route handlers that import types or helper utilities.
+3. **Fail-Closed Header Guards Before Database Ingestion**: `withAuth` strictly executes request validation (e.g. `x-org-id` regex validation) and header inspection before invoking Firebase Admin or Firestore repositories. An invalid or missing header triggers HTTP 400 immediately, never a 500.
+
+### Honest Offline Fallback Architecture
+All institutional views (Dashboard, Forecast, Audit Trail, Digital Twin) adhere to strict data provenance rules:
+1. **Failure Discrimination**:
+   - `401 Unauthorized` / `403 Forbidden`: Displays the authoritative authentication or permission error message directly to the operator with clear next steps. **No fallback data is ever presented.**
+   - `429 Too Many Requests`: Displays an active rate limit indicator with countdown timer and retry guidance.
+   - `5xx Server Error` / Network Timeout: Activates local engine calculation fallback.
+2. **Persistent Fallback Indicators**:
+   - A persistent amber banner stating: *"Live data unavailable. Showing locally generated sample data. Nothing here is saved."*
+   - Includes a direct `Retry` action button and the serverless `requestId` (from `x-request-id` header).
+   - Fallback datasets explicitly stamp `source: "offline-fallback"`.
+   - The global TopBar badge dynamically switches from green `Live` to amber `Offline fallback`.
+3. **Honest Simulation Telemetry (`kpi-grid.tsx`)**:
+   - Avoided overdraft fees and yield earned vs naive policies are only displayed when actively computed from a seed-matched replay simulation.
+   - Uncomputed states render an em-dash (`—`) with tooltip `"Run the replay to compute"` and label `(Simulated, seed <seed>)`. Arbitrary default numbers are strictly forbidden.
+
+### Canonical Route Structure & Redirects
+To avoid navigational ambiguity, duplicate routes have been consolidated:
+- Canonical route for simulations is `/twin` (`/digital-twin` permanently redirects via HTTP 308).
+- Canonical route for audit logs is `/audit` (`/compliance` permanently redirects via HTTP 308).
+- Canonical route for yield optimizer is `/optimizer` (`/vaults` permanently redirects via HTTP 308).
 
 ### Threat Notes & Accepted Risks
 1. **CSRF Immunity:** Authentication is exclusively handled via `Authorization: Bearer <token>` headers attached programmatically via `apiFetch`. No session cookies or browser credentials are read or respected by API route handlers, rendering Cross-Site Request Forgery (CSRF) mechanically non-applicable.
@@ -299,6 +325,7 @@ Clients can supply an optional `Idempotency-Key` header (`^[A-Za-z0-9_-]{1,128}$
 4. **Vercel Execution Limits:** Heavy endpoints export `export const maxDuration = 60;`. Bounded work unit tests verify that 1,000 trials across 3 policies complete in ~50ms, well within serverless timeouts.
 
 ## Current Implementation Status
-Phases 1 through 21 are complete: pure TypeScript engine, Route Handlers, Firebase client authentication, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, dual-theme system, full dashboard wiring, stress scenario simulator, Digital Twin page (`/twin`), dedicated pages for Forecast, Reserve, Optimizer, and Analytics, and **Phase 21 Security & Reliability** (CSP and security headers, durable rate limiter, idempotency replay, request hardening, health/ready probes, e2e suite, and GitHub Actions CI). Verified with 389 Vitest tests, ESLint (0 errors, 0 warnings), tsc (0 errors), and Next.js 16 production build.
+Phases 1 through 22 are complete: pure TypeScript engine, Route Handlers, Firebase client authentication, Firebase Admin SDK integration, route-level org authorisation, client API fetch plumbing, typed Firestore repositories, security rules, composite indexes, route persistence with SHA-256 audit logs, dual-theme system, full dashboard wiring, stress scenario simulator, Digital Twin page (`/twin`), dedicated pages for Forecast, Reserve, Optimizer, and Analytics, Phase 21 Security & Reliability, and **Phase 22 Production Hardening & Honest Fallbacks** (elimination of Vercel module-load 500s via `serverExternalPackages` and lazy CJS require, honest fallback indicators and provenance tracking, removal of uncomputed KPI values, route canonicalization, and safe emulator-first member seeding). Verified with 424 Vitest tests (44 test suites), ESLint (0 errors, 0 warnings), TypeScript strict (0 errors), and Next.js 16 production build.
+
 
 

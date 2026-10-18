@@ -47,6 +47,7 @@ export const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  serverExternalPackages: ["firebase-admin", "@google-cloud/firestore"],
   turbopack: {
     rules: {
       "*.css": {
@@ -54,6 +55,25 @@ const nextConfig: NextConfig = {
         as: "*.css",
       },
     },
+  },
+  async redirects() {
+    return [
+      {
+        source: "/digital-twin",
+        destination: "/twin",
+        permanent: true,
+      },
+      {
+        source: "/compliance",
+        destination: "/audit",
+        permanent: true,
+      },
+      {
+        source: "/vaults",
+        destination: "/optimizer",
+        permanent: true,
+      },
+    ];
   },
   async headers() {
     return [

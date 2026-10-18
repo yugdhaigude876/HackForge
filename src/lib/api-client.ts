@@ -35,6 +35,7 @@ export interface ApiSuccessResult<T> {
   ok: true;
   data: T;
   status: number;
+  requestId?: string;
 }
 
 export interface ApiErrorResult {
@@ -43,8 +44,10 @@ export interface ApiErrorResult {
     code: string;
     message: string;
     details?: unknown;
+    requestId?: string;
   };
   status: number;
+  requestId?: string;
 }
 
 export type ApiResponse<T> = ApiSuccessResult<T> | ApiErrorResult;
@@ -187,11 +190,14 @@ export async function apiFetch<T = unknown>(
     }
   }
 
+  const headerRequestId = res.headers.get("x-request-id") || res.headers.get("x-vercel-id") || undefined;
+
   if (res.ok) {
     return {
       ok: true,
       data: responseData as T,
       status: res.status,
+      requestId: headerRequestId,
     };
   }
 
@@ -200,15 +206,18 @@ export async function apiFetch<T = unknown>(
     responseData !== null &&
     "error" in responseData
   ) {
-    const err = (responseData as { error: { code?: string; message?: string; details?: unknown } }).error;
+    const err = (responseData as { error: { code?: string; message?: string; details?: unknown; requestId?: string } }).error;
+    const reqId = err.requestId || headerRequestId;
     return {
       ok: false,
       error: {
         code: err.code || (res.status === 401 ? "UNAUTHENTICATED" : res.status === 403 ? "FORBIDDEN" : "INTERNAL"),
         message: err.message || res.statusText || "Request failed",
         details: err.details,
+        requestId: reqId,
       },
       status: res.status,
+      requestId: reqId,
     };
   }
 
@@ -217,7 +226,9 @@ export async function apiFetch<T = unknown>(
     error: {
       code: res.status === 401 ? "UNAUTHENTICATED" : res.status === 403 ? "FORBIDDEN" : "INTERNAL",
       message: res.statusText || "Request failed",
+      requestId: headerRequestId,
     },
     status: res.status,
+    requestId: headerRequestId,
   };
 }

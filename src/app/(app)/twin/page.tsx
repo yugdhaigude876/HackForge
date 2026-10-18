@@ -30,6 +30,12 @@ import {
   type PolicyDeltasDTO,
 } from "@/components/finance/twin-comparison-table";
 import { TwinReplayScrubber } from "@/components/finance/twin-replay-scrubber";
+import { compareScenarioAcrossPolicies } from "@/engine/simulate";
+import { generateTransactions } from "@/engine/generator";
+import { buildContinuousTimeSeries } from "@/engine/timeseries";
+import { Money } from "@/engine/money";
+import { FallbackBanner } from "@/components/ui/fallback-banner";
+import { useDataSource } from "@/components/providers/data-source-provider";
 
 interface InstrumentDTO {
   id: string;
@@ -193,7 +199,7 @@ export default function DigitalTwinPage() {
   const isLive = Boolean(user && !isMock);
   const { role: serverRole, loading: isRoleLoading } = useOrgRole();
   const userRole = isLive ? (serverRole ?? "viewer") : "viewer";
-  const canRun = isLive && !isRoleLoading && Boolean(serverRole) && (userRole === "analyst" || userRole === "admin");
+  const canRun = isLive && !isRoleLoading && Boolean(serverRole) && (userRole as string) !== "viewer";
 
   // Scenario Builder state
   const [outflowShockPct, setOutflowShockPct] = useState<number>(25);
@@ -216,12 +222,25 @@ export default function DigitalTwinPage() {
   const [orgInstruments, setOrgInstruments] = useState<InstrumentDTO[]>([]);
 
   // Execution & Replay state
+  const orgId = process.env.NEXT_PUBLIC_DEFAULT_ORG_ID || "org_demo";
+  const { setSource } = useDataSource();
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isBaselineMissing, setIsBaselineMissing] = useState<boolean>(false);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
   const [activeComparison, setActiveComparison] = useState<ComparisonResponseData | null>(null);
   const [scrubbedHour, setScrubbedHour] = useState<number>(0);
+  const [isFallback, setIsFallback] = useState<boolean>(false);
+  const [fallbackRequestId, setFallbackRequestId] = useState<string | null>(null);
+
+  // Sync top bar source
+  useEffect(() => {
+    if (isFallback || activeComparison?.source === "offline-fallback") {
+      setSource("offline-fallback");
+    } else {
+      setSource(null);
+    }
+  }, [isFallback, activeComparison?.source, setSource]);
 
   // History state
   const [historyList, setHistoryList] = useState<StoredComparisonSummary[]>([]);
@@ -318,6 +337,142 @@ export default function DigitalTwinPage() {
     setSeed(`twin-${Math.random().toString(36).slice(2, 8)}`);
   };
 
+  // Run local Monte Carlo comparison fallback
+  const runLocalComparison = (reqId?: string) => {
+    const endDate = new Date("2026-03-01T00:00:00.000Z");
+    const startDate = new Date(endDate.getTime() - 28 * 24 * 3600_000);
+    const txs = generateTransactions({
+      seed,
+      startDate,
+      endDate,
+      baseVolumePerHour: Money.fromMajor(20_000_000, "USD"),
+    });
+    const history = buildContinuousTimeSeries(txs, { startDate, endDate, currency: "USD" });
+
+    const localComp = compareScenarioAcrossPolicies({
+      history,
+      startingCash: Money.fromMajor(50_000_000, "USD"),
+      instruments: [
+        {
+          id: "tier1_repo",
+          name: "Tier 1: Overnight Repo",
+          apy: 0.0429,
+          capacity: Money.fromMajor(25_000_000, "USD"),
+          withdrawalPenalty: 0.005,
+          settlementLagHours: 0,
+          earlyWithdrawalRisk: 0.0,
+        },
+        {
+          id: "tier2_bonds",
+          name: "Tier 2: 2Y Sovereign Bonds",
+          apy: 0.048,
+          capacity: Money.fromMajor(15_000_000, "USD"),
+          withdrawalPenalty: 0.02,
+          settlementLagHours: 0,
+          earlyWithdrawalRisk: 0.05,
+        },
+        {
+          id: "tier3_equities",
+          name: "Tier 3: Growth Equities",
+          apy: 0.10,
+          capacity: Money.fromMajor(10_000_000, "USD"),
+          withdrawalPenalty: 0.15,
+          settlementLagHours: 0,
+          earlyWithdrawalRisk: 0.15,
+        },
+      ],
+      scenario: {
+        outflowShockPct,
+        shockStartHour,
+        shockDurationHours,
+        settlementDelayHours,
+        correlatedRun: enableCorrelatedRun
+          ? { intensityPct: runIntensityPct, decay: runDecay }
+          : undefined,
+        yieldRateShockBps,
+        instrumentOutageIds: selectedOutages,
+        confidence: confidence / 100,
+      },
+      policies: ["reserve-juggler", "hold-all-cash", "fixed-buffer"],
+      policyParams: { bufferPct: bufferPct / 100 },
+      trials: Math.min(trials, 100),
+      horizonHours,
+      seed,
+    });
+
+    const policyResultsFormatted: ComparisonResponseData["policyResults"] = {};
+    for (const [pol, res] of Object.entries(localComp.policyResults)) {
+      policyResultsFormatted[pol] = {
+        policy: pol,
+        seed,
+        trials: localComp.trials,
+        horizonHours: localComp.horizonHours,
+        shortfallFrequency: res.shortfallFrequency,
+        expectedShortfallMinor: res.expectedShortfall.amountMinor.toString(),
+        p95ShortfallMinor: res.p95Shortfall.amountMinor.toString(),
+        emergencyBorrowingCostMinor: res.emergencyBorrowingCost.amountMinor.toString(),
+        penaltiesPaidMinor: res.penaltiesPaid.amountMinor.toString(),
+        grossYieldMinor: res.grossYield.amountMinor.toString(),
+        netYieldMinor: res.netYield.amountMinor.toString(),
+        meanIdleCashMinor: res.meanIdleCash.amountMinor.toString(),
+        idleCashHoursMinor: res.idleCashHours.amountMinor.toString(),
+        cashPath: res.cashPath.map((p) => ({
+          hour: p.hour,
+          p5CashMinor: p.p5Cash.amountMinor.toString(),
+          medianCashMinor: p.medianCash.amountMinor.toString(),
+          p95CashMinor: p.p95Cash.amountMinor.toString(),
+        })),
+      };
+    }
+
+    const deltasFormatted: Record<string, PolicyDeltasDTO> = {};
+    for (const [pol, d] of Object.entries(localComp.deltas)) {
+      deltasFormatted[pol] = {
+        vsHoldAllCash: d.vsHoldAllCash
+          ? {
+              netYieldMinor: d.vsHoldAllCash.netYield.amountMinor.toString(),
+              shortfallFrequency: d.vsHoldAllCash.shortfallFrequency,
+              expectedShortfallMinor: d.vsHoldAllCash.expectedShortfall.amountMinor.toString(),
+              p95ShortfallMinor: d.vsHoldAllCash.p95Shortfall.amountMinor.toString(),
+              penaltiesPaidMinor: d.vsHoldAllCash.penaltiesPaid.amountMinor.toString(),
+              emergencyBorrowingCostMinor: d.vsHoldAllCash.emergencyBorrowingCost.amountMinor.toString(),
+            }
+          : undefined,
+        vsFixedBuffer: d.vsFixedBuffer
+          ? {
+              netYieldMinor: d.vsFixedBuffer.netYield.amountMinor.toString(),
+              shortfallFrequency: d.vsFixedBuffer.shortfallFrequency,
+              expectedShortfallMinor: d.vsFixedBuffer.expectedShortfall.amountMinor.toString(),
+              p95ShortfallMinor: d.vsFixedBuffer.p95Shortfall.amountMinor.toString(),
+              penaltiesPaidMinor: d.vsFixedBuffer.penaltiesPaid.amountMinor.toString(),
+              emergencyBorrowingCostMinor: d.vsFixedBuffer.emergencyBorrowingCost.amountMinor.toString(),
+            }
+          : undefined,
+      };
+    }
+
+    const localData: ComparisonResponseData = {
+      comparisonId: `cmp-local-${Date.now()}`,
+      seed,
+      trials: localComp.trials,
+      horizonHours: localComp.horizonHours,
+      scenario: localComp.scenario,
+      policies: localComp.policies,
+      policyResults: policyResultsFormatted,
+      deltas: deltasFormatted,
+      winners: localComp.winners,
+      disclaimer: localComp.disclaimer,
+      source: "offline-fallback",
+      createdAt: new Date().toISOString(),
+    };
+
+    setActiveComparison(localData);
+    setScrubbedHour(0);
+    setError(null);
+    setIsFallback(true);
+    setFallbackRequestId(reqId || null);
+  };
+
   // Run Comparison
   const handleRunComparison = async () => {
     if (!canRun || isRunning || retryAfterSeconds !== null) return;
@@ -356,27 +511,37 @@ export default function DigitalTwinPage() {
         setActiveComparison(res.data);
         setScrubbedHour(0);
         setError(null);
+        setIsFallback(false);
+        setFallbackRequestId(null);
         refreshHistory();
       } else {
+        if (res.status === 401 || res.status === 403) {
+          const msg = res.status === 401
+            ? "Authentication required. Please sign in with an analyst account to run simulations."
+            : (res.error?.message || "Permission denied. Analyst or admin access required to run simulations.");
+          setError(msg);
+          setIsFallback(false);
+          setFallbackRequestId(null);
+          return;
+        }
+
         if (res.status === 429) {
-          const details = res.error.details as { retryAfterSeconds?: number } | undefined;
+          const details = res.error?.details as { retryAfterSeconds?: number } | undefined;
           const retrySec = details?.retryAfterSeconds ?? 10;
           setRetryAfterSeconds(retrySec);
-          setError(res.error.message || `Rate limited. Please wait ${retrySec}s.`);
-        } else {
-          const msg = res.error.message || "Failed to execute policy comparison.";
-          setError(msg);
-          if (
-            msg.includes("cash baseline") ||
-            msg.includes("dashboard first") ||
-            msg.includes("instruments")
-          ) {
-            setIsBaselineMissing(true);
-          }
+          setError(res.error?.message || `Rate limited. Please wait ${retrySec}s.`);
+          setIsFallback(false);
+          setFallbackRequestId(null);
+          return;
         }
+
+        // 5xx / Network / Timeout: honest offline fallback
+        console.warn(`[DigitalTwin] Server error (HTTP ${res.status}), activating offline fallback solver`);
+        runLocalComparison(res.requestId);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Policy comparison request failed.");
+      console.warn("[DigitalTwin] Network exception, activating offline fallback solver:", err);
+      runLocalComparison(undefined);
     } finally {
       setIsRunning(false);
     }
@@ -430,7 +595,11 @@ export default function DigitalTwinPage() {
 
         {/* Status indicators */}
         <div className="flex items-center gap-2">
-          {activeComparison ? (
+          {isFallback || activeComparison?.source === "offline-fallback" ? (
+            <Badge tone="warning" data-testid="fallback-badge">
+              Offline fallback
+            </Badge>
+          ) : activeComparison ? (
             <Badge tone="positive" data-testid="twin-status-badge">
               Comparison Active
             </Badge>
@@ -439,6 +608,15 @@ export default function DigitalTwinPage() {
           )}
         </div>
       </div>
+
+      {/* Persistent Offline Fallback Banner */}
+      {isFallback && (
+        <FallbackBanner
+          onRetry={handleRunComparison}
+          requestId={fallbackRequestId}
+          isRetrying={isRunning}
+        />
+      )}
 
       {/* Mock Mode / Unauthenticated Warning */}
       {!isLive && (
@@ -463,11 +641,11 @@ export default function DigitalTwinPage() {
         <div
           role="status"
           className="flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-xs text-muted"
+          data-testid="viewer-role-notice"
         >
           <Clock className="h-4 w-4 text-muted shrink-0" aria-hidden />
           <span>
-            You have Viewer permissions. You can replay stored scenario comparisons from the history below,
-            but cannot initiate new simulation runs.
+            You are a viewer in org {orgId}. You have Viewer permissions. Ask an admin to grant analyst access.
           </span>
         </div>
       )}
@@ -752,6 +930,7 @@ export default function DigitalTwinPage() {
                 onClick={handleRunComparison}
                 disabled={isRunning || retryAfterSeconds !== null}
                 data-testid="run-comparison-btn"
+                className="bg-[#A3E635] text-[#0B0E14] font-bold hover:bg-[#86efac] shadow-[0_0_15px_rgba(163,230,53,0.4)]"
               >
                 {isRunning ? (
                   <>
@@ -762,11 +941,12 @@ export default function DigitalTwinPage() {
                   `Wait ${retryAfterSeconds}s`
                 ) : (
                   <>
-                    <Play className="h-4 w-4 mr-1.5" /> Run Comparison
+                    <Play className="h-4 w-4 mr-1.5 fill-current" /> Run Stress Comparison
                   </>
                 )}
               </Button>
             )}
+
           </div>
 
           {/* Error Banner */}

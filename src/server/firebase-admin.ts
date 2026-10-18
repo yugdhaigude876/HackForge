@@ -1,8 +1,41 @@
 import "server-only";
+import { createRequire } from "node:module";
 
-import { initializeApp, getApps, cert, applicationDefault, type App, type ServiceAccount } from "firebase-admin/app";
-import { getAuth, type Auth } from "firebase-admin/auth";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import type { App, ServiceAccount } from "firebase-admin/app";
+import type { Auth } from "firebase-admin/auth";
+import type { Firestore } from "firebase-admin/firestore";
+
+const requireModule = createRequire(import.meta.url);
+
+function getAppModule() {
+  try {
+    return requireModule("firebase-admin/app") as typeof import("firebase-admin/app");
+  } catch (err) {
+    throw new MissingFirebaseAdminConfigError(
+      `Failed to load firebase-admin/app: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+function getAuthModule() {
+  try {
+    return requireModule("firebase-admin/auth") as typeof import("firebase-admin/auth");
+  } catch (err) {
+    throw new MissingFirebaseAdminConfigError(
+      `Failed to load firebase-admin/auth: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+function getFirestoreModule() {
+  try {
+    return requireModule("firebase-admin/firestore") as typeof import("firebase-admin/firestore");
+  } catch (err) {
+    throw new MissingFirebaseAdminConfigError(
+      `Failed to load firebase-admin/firestore: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
 
 export class MissingFirebaseAdminConfigError extends Error {
   constructor(message = "FIREBASE_SERVICE_ACCOUNT_JSON environment variable is missing, empty, or invalid.") {
@@ -72,6 +105,8 @@ export function getAdminApp(): App {
     return cachedAdminApp;
   }
 
+  const { initializeApp, getApps, cert, applicationDefault } = getAppModule();
+
   const existingApps = getApps();
   if (existingApps.length > 0) {
     cachedAdminApp = existingApps[0];
@@ -106,6 +141,7 @@ export function getAdminApp(): App {
  * Returns the Firebase Admin Auth instance.
  */
 export function getAdminAuth(): Auth {
+  const { getAuth } = getAuthModule();
   return getAuth(getAdminApp());
 }
 
@@ -119,6 +155,7 @@ export function getAdminFirestore(): Firestore {
   if (customAdminFirestore) {
     return customAdminFirestore;
   }
+  const { getFirestore } = getFirestoreModule();
   return getFirestore(getAdminApp());
 }
 

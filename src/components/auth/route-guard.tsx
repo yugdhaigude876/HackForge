@@ -4,7 +4,8 @@ import React, { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { Card, Skeleton } from "@/components/ui/primitives";
-import { ShieldCheck, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import { BrandLogo } from "@/components/brand/logo";
 
 export interface AuthGuardProps {
   children: ReactNode;
@@ -29,9 +30,7 @@ export function AuthGuard({ children, fallback }: AuthGuardProps) {
       <div className="flex min-h-screen items-center justify-center bg-background p-4" data-testid="auth-guard-loading">
         <Card className="w-full max-w-md border-border/80 bg-surface/90 p-6 shadow-2xl backdrop-blur">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <ShieldCheck className="h-5 w-5 animate-pulse" />
-            </div>
+            <BrandLogo size={40} className="animate-pulse" />
             <div>
               <p className="text-sm font-semibold tracking-tight text-foreground">Reserve Juggler</p>
               <p className="text-xs text-muted">Verifying institutional credentials...</p>

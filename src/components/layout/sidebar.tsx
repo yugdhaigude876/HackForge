@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/firebase/auth-context";
+import { BrandLogo } from "@/components/brand/logo";
 
 interface SidebarProps {
   onNavigate?: () => void;
@@ -46,9 +47,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
       <div>
         <div className="flex items-center justify-between pb-6 border-b border-[#1E2536]">
           <Link href="/dashboard" className="flex items-center gap-2.5">
-            <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-[#121620] border border-[#1E2536]">
-              <span className="h-2.5 w-2.5 rounded-full bg-[#A3E635] shadow-[0_0_10px_#A3E635]" />
-            </div>
+            <BrandLogo size={36} />
             <div>
               <span className="font-bold tracking-wider text-sm text-[#F8FAFC]">RESERVE JUGGLER</span>
               <div className="flex items-center gap-1.5">

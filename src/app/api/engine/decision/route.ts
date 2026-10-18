@@ -330,3 +330,13 @@ export const POST = withAuth(
   },
   { minRole: "analyst" }
 );
+
+/**
+ * GET /api/engine/decision
+ * Alias for listing / fetching latest decisions
+ */
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const { GET: listDecisionsGet } = await import("@/app/api/decisions/route");
+  return listDecisionsGet(request);
+}
+

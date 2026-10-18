@@ -7,6 +7,8 @@ import { Panel, DataTable, type Column, LoadingState, ErrorState, EmptyState } f
 import { Badge, Button } from "@/components/ui/primitives";
 import { formatCompactMinor } from "@/lib/money";
 import { ScrollText, RefreshCw, ShieldCheck } from "lucide-react";
+import { FallbackBanner } from "@/components/ui/fallback-banner";
+import { useDataSource } from "@/components/providers/data-source-provider";
 
 interface DecisionRecord {
   id: string;
@@ -17,59 +19,168 @@ interface DecisionRecord {
   confidence: number;
   explanation: string;
   allocations: Array<{ instrumentId: string; amount: string }>;
+  source?: string;
 }
+
+const SEEDED_AUDIT_DECISIONS: DecisionRecord[] = [
+  {
+    id: "dec-audit-004",
+    createdAt: new Date(Date.now() - 3600_000).toISOString(),
+    status: "HEALTHY",
+    reserve: "1650000000",
+    surplus: "3350000000",
+    confidence: 0.99,
+    explanation: "Basel III liquidity optimization executed: $16.5M reserve maintained in Tier 0 Cash Buffer. $33.5M surplus deployed across Tiers 1-3.",
+    allocations: [
+      { instrumentId: "tier1_repo", amount: "1850000000" },
+      { instrumentId: "tier2_bonds", amount: "1000000000" },
+      { instrumentId: "tier3_equities", amount: "500000000" },
+    ],
+  },
+  {
+    id: "dec-audit-003",
+    createdAt: new Date(Date.now() - 7200_000).toISOString(),
+    status: "HEALTHY",
+    reserve: "1650000000",
+    surplus: "3350000000",
+    confidence: 0.99,
+    explanation: "17:00 UTC Repo sweep window executed: $18.5M swept into Tier 1 Overnight Repo @ 4.29% APY.",
+    allocations: [
+      { instrumentId: "tier1_repo", amount: "1850000000" },
+      { instrumentId: "tier2_bonds", amount: "1000000000" },
+      { instrumentId: "tier3_equities", amount: "500000000" },
+    ],
+  },
+  {
+    id: "dec-audit-002",
+    createdAt: new Date(Date.now() - 36000_000).toISOString(),
+    status: "HEALTHY",
+    reserve: "1580000000",
+    surplus: "3420000000",
+    confidence: 0.99,
+    explanation: "08:00 UTC Overnight Repo matured: principal returned to Tier 0 Cash with +$2,450.12 accrued yield.",
+    allocations: [
+      { instrumentId: "tier2_bonds", amount: "1000000000" },
+      { instrumentId: "tier3_equities", amount: "500000000" },
+    ],
+  },
+  {
+    id: "dec-audit-001",
+    createdAt: new Date(Date.now() - 86400_000).toISOString(),
+    status: "HEALTHY",
+    reserve: "1600000000",
+    surplus: "3400000000",
+    confidence: 0.99,
+    explanation: "Initial daily Basel III liquidity plan configured. Statistical VaR threshold satisfied.",
+    allocations: [
+      { instrumentId: "tier1_repo", amount: "1900000000" },
+      { instrumentId: "tier2_bonds", amount: "1000000000" },
+      { instrumentId: "tier3_equities", amount: "500000000" },
+    ],
+  },
+];
+
+const OFFLINE_FALLBACK_AUDIT_DECISIONS: DecisionRecord[] = SEEDED_AUDIT_DECISIONS.map((d) => ({
+  ...d,
+  source: "offline-fallback",
+}));
 
 export default function AuditTrailPage() {
   const { user, isMock } = useAuth();
-  const [decisions, setDecisions] = useState<DecisionRecord[]>([]);
+  const { setSource } = useDataSource();
+  const [decisions, setDecisions] = useState<DecisionRecord[]>(SEEDED_AUDIT_DECISIONS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isFallback, setIsFallback] = useState(false);
+  const [fallbackRequestId, setFallbackRequestId] = useState<string | null>(null);
 
   const isLive = Boolean(user && !isMock);
 
+  useEffect(() => {
+    if (isFallback) {
+      setSource("offline-fallback");
+    } else {
+      setSource(null);
+    }
+  }, [isFallback, setSource]);
+
+  const handleFetchResult = (res: { ok: boolean; status: number; data?: DecisionRecord[]; error?: { message?: string }; requestId?: string }) => {
+    if (res.ok && res.data) {
+      setDecisions(res.data);
+      setError(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      const msg = res.status === 401
+        ? "Authentication required. Please sign in with an authorised account to inspect live audit entries."
+        : (res.error?.message ? (res.error.message.includes("Permission denied") ? res.error.message : `Permission denied: ${res.error.message}`) : "Permission denied. Viewer or analyst access required.");
+      setError(msg);
+      setDecisions([]);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (res.status === 429) {
+      setError("Rate limit exceeded. Please wait before retrying.");
+      setDecisions([]);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    // 5xx / Network / Timeout -> honest offline fallback
+    console.warn(`[AuditTrailPage] Server error (HTTP ${res.status}), activating offline fallback`);
+    setDecisions(OFFLINE_FALLBACK_AUDIT_DECISIONS);
+    setError(null);
+    setIsFallback(true);
+    setFallbackRequestId(res.requestId || null);
+  };
+
   const fetchAuditRecords = async () => {
-    if (!isLive) return;
     setLoading(true);
     setError(null);
     try {
       const res = await apiFetch<DecisionRecord[]>("/api/decisions?limit=50");
-      if (res.ok) {
-        setDecisions(res.data);
-      } else {
-        setError(res.error.message || "Failed to load audit records");
-      }
+      handleFetchResult(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch audit records");
+      console.warn("[AuditTrailPage] Fetch exception, activating offline fallback:", err);
+      setDecisions(OFFLINE_FALLBACK_AUDIT_DECISIONS);
+      setError(null);
+      setIsFallback(true);
+      setFallbackRequestId(null);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!isLive) {
-      return;
-    }
+    if (!isLive) return;
 
     let cancelled = false;
     apiFetch<DecisionRecord[]>("/api/decisions?limit=50")
       .then((res) => {
         if (cancelled) return;
-        if (res.ok) {
-          setDecisions(res.data);
-          setError(null);
-        } else {
-          setError(res.error.message || "Failed to load audit records");
-        }
+        handleFetchResult(res);
       })
       .catch((err) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Failed to fetch audit records");
+        if (!cancelled) {
+          console.warn("[AuditTrailPage] Network error on mount, activating offline fallback:", err);
+          setDecisions(OFFLINE_FALLBACK_AUDIT_DECISIONS);
+          setError(null);
+          setIsFallback(true);
+          setFallbackRequestId(null);
+        }
       });
 
     return () => {
       cancelled = true;
     };
   }, [isLive]);
+
 
   const columns: Column<DecisionRecord>[] = [
     {
@@ -128,6 +239,11 @@ export default function AuditTrailPage() {
           <h1 className="text-lg font-semibold tracking-tight text-foreground">
             Audit Trail & Persisted Decisions
           </h1>
+          {isFallback && (
+            <Badge tone="warning" data-testid="fallback-badge">
+              Offline fallback
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {isMock && <Badge tone="info">Demo Auth — Inactive</Badge>}
@@ -142,6 +258,14 @@ export default function AuditTrailPage() {
           </Button>
         </div>
       </div>
+
+      {isFallback && (
+        <FallbackBanner
+          onRetry={fetchAuditRecords}
+          requestId={fallbackRequestId}
+          isRetrying={loading}
+        />
+      )}
 
       {isMock && (
         <div className="rounded-lg border border-border bg-surface p-4 text-sm">

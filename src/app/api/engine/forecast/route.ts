@@ -292,3 +292,13 @@ export const POST = withAuth(
   },
   { minRole: "analyst" }
 );
+
+/**
+ * GET /api/engine/forecast
+ * Alias for retrieving forecasts
+ */
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const { GET: forecastGet } = await import("@/app/api/forecast/route");
+  return forecastGet(request);
+}
+

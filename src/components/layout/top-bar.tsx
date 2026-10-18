@@ -2,15 +2,23 @@
 
 import { Clock, Download, Play, ShieldAlert, ShieldCheck, AlertTriangle, Menu } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
+import { BrandLogo } from "@/components/brand/logo";
 
 interface TopBarProps {
   clockTimestamp?: string;
   isRepoWindowOpen?: boolean;
   isRepoMaturing?: boolean;
+  repoMaturedYieldUsd?: number;
   solvencyStatus?: "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED";
   mase?: number | null;
   confidence?: number;
   deficitAmountUsd?: number;
+  source?: string;
+  isPlaying?: boolean;
+  playbackSpeed?: number;
+  onPlayToggle?: () => void;
+  onStepHour?: () => void;
+  onSpeedChange?: (speed: number) => void;
   onTriggerSweep?: () => void;
   onRunStressTest?: () => void;
   onExportAuditCsv?: () => void;
@@ -21,10 +29,17 @@ export function TopBar({
   clockTimestamp = "2026-01-01 17:00:00 UTC",
   isRepoWindowOpen = true,
   isRepoMaturing = false,
+  repoMaturedYieldUsd = 2450.12,
   solvencyStatus = "HEALTHY",
   mase = 0.85,
   confidence = 0.99,
   deficitAmountUsd = 0,
+  source,
+  isPlaying = false,
+  playbackSpeed = 10,
+  onPlayToggle,
+  onStepHour,
+  onSpeedChange,
   onTriggerSweep,
   onRunStressTest,
   onExportAuditCsv,
@@ -32,8 +47,8 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#1E2536] bg-[#0B0E14]/90 px-4 lg:px-6 backdrop-blur">
-      {/* Left: Mobile Nav toggle + Clock & Window */}
-      <div className="flex items-center gap-3.5">
+      {/* Left: Mobile Nav toggle + Clock & Replay Ticker */}
+      <div className="flex items-center gap-3">
         <Button
           variant="ghost"
           size="icon"
@@ -43,6 +58,7 @@ export function TopBar({
         >
           <Menu className="h-5 w-5" />
         </Button>
+        <BrandLogo size={30} className="lg:hidden" />
 
         {/* Simulation Clock Readout */}
         <div className="flex items-center gap-2 rounded-lg bg-[#121620] border border-[#1E2536] px-3 py-1.5 font-mono text-xs text-[#F8FAFC]">
@@ -50,30 +66,98 @@ export function TopBar({
           <span className="font-medium tracking-tight">{clockTimestamp}</span>
         </div>
 
-        {/* Overnight Repo Window Indicator */}
+        {/* Top Bar Replay Controls: Play/Pause, Step +1h, Speeds */}
+        {onPlayToggle && (
+          <div className="hidden sm:flex items-center gap-1 bg-[#121620] border border-[#1E2536] rounded-lg p-1">
+            <button
+              type="button"
+              onClick={onPlayToggle}
+              className={`flex items-center gap-1 rounded px-2.5 py-1 text-xs font-semibold transition-colors ${
+                isPlaying
+                  ? "bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30"
+                  : "bg-[#A3E635] text-[#0B0E14] hover:bg-[#86efac]"
+              }`}
+            >
+              {isPlaying ? (
+                <>
+                  <span className="h-2 w-2 rounded-full bg-[#EF4444] animate-pulse" />
+                  <span>Pause</span>
+                </>
+              ) : (
+                <>
+                  <Play className="h-3 w-3 fill-current" />
+                  <span>Play</span>
+                </>
+              )}
+            </button>
+
+            {onStepHour && (
+              <button
+                type="button"
+                onClick={onStepHour}
+                className="rounded px-2 py-1 text-xs font-mono text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#1E2536] transition-colors"
+                title="Advance 1 Hour"
+              >
+                +1h
+              </button>
+            )}
+
+            {onSpeedChange && (
+              <div className="flex items-center border-l border-[#1E2536] pl-1 ml-1">
+                {[1, 10, 60].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => onSpeedChange(s)}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-bold transition-colors ${
+                      playbackSpeed === s
+                        ? "bg-[#38BDF8]/20 text-[#38BDF8]"
+                        : "text-[#94A3B8] hover:text-[#F8FAFC]"
+                    }`}
+                  >
+                    {s}x
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Overnight Repo Window Indicator with Flashing Badges */}
         {isRepoWindowOpen ? (
-          <div className="hidden sm:flex items-center gap-2 rounded-lg bg-[#818CF8]/10 border border-[#818CF8]/30 px-3 py-1.5 text-xs font-semibold text-[#818CF8]">
+          <div className="hidden md:flex items-center gap-2 rounded-lg bg-[#818CF8]/15 border border-[#818CF8]/40 px-3 py-1.5 text-xs font-bold text-[#818CF8] animate-pulse">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#818CF8] opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-[#818CF8]" />
             </span>
-            <span>REPO WINDOW OPEN (17:00 UTC)</span>
+            <span>REPO SWEEP WINDOW OPEN (17:00 UTC)</span>
           </div>
         ) : isRepoMaturing ? (
-          <div className="hidden sm:flex items-center gap-2 rounded-lg bg-[#22C55E]/10 border border-[#22C55E]/30 px-3 py-1.5 text-xs font-semibold text-[#22C55E]">
+          <div className="hidden md:flex items-center gap-2 rounded-lg bg-[#22C55E]/20 border border-[#22C55E]/40 px-3 py-1.5 text-xs font-bold text-[#22C55E] animate-pulse">
             <span className="h-2 w-2 rounded-full bg-[#22C55E]" />
-            <span>REPO MATURING (08:00 UTC)</span>
+            <span>REPO MATURED: +${repoMaturedYieldUsd.toLocaleString()} EARNED</span>
           </div>
         ) : (
-          <div className="hidden sm:flex items-center gap-2 rounded-lg bg-[#121620] border border-[#1E2536] px-3 py-1.5 text-xs font-mono text-[#94A3B8]">
+          <div className="hidden md:flex items-center gap-2 rounded-lg bg-[#121620] border border-[#1E2536] px-3 py-1.5 text-xs font-mono text-[#94A3B8]">
             <span className="h-2 w-2 rounded-full bg-[#94A3B8]" />
             <span>REPO WINDOW CLOSED</span>
           </div>
         )}
       </div>
 
+
       {/* Right: Master Solvency Badge & Quick Actions */}
       <div className="flex items-center gap-3">
+        {source === "offline-fallback" && (
+          <div
+            data-testid="fallback-badge"
+            className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 px-3 py-1.5 text-xs font-bold text-amber-300 font-mono shadow-[0_0_12px_rgba(245,158,11,0.2)]"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
+            <span>Offline fallback</span>
+          </div>
+        )}
+
         {/* Master Solvency Status Badge */}
         {solvencyStatus === "HEALTHY" ? (
           <div
