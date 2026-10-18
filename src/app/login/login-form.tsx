@@ -273,6 +273,20 @@ export function LoginForm() {
           )}
 
           {/* Form */}
+          <div className="flex items-center justify-between pb-1 text-[11px]">
+            <span className="text-muted">Master Admin Login:</span>
+            <button
+              type="button"
+              onClick={() => {
+                setEmail("admin@hackforge.internal");
+                setPassword("Admin@ReserveJuggler2026!");
+                setMode("signin");
+              }}
+              className="font-medium text-primary hover:underline"
+            >
+              Auto-fill Admin
+            </button>
+          </div>
           <form onSubmit={handleSubmit} noValidate className="space-y-4">
 
             {mode === "signup" && (
