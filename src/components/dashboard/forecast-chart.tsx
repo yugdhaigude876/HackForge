@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -12,6 +12,7 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts";
+import { useChartTheme } from "@/components/finance/use-chart-theme";
 import { cn } from "@/lib/utils";
 
 interface ChartDataPoint {
@@ -52,8 +53,10 @@ export function ForecastChart({
   onHorizonChange,
 }: ForecastChartProps) {
   const [selectedHorizon, setSelectedHorizon] = useState<number>(168);
+  const theme = useChartTheme();
+  const gradientId = React.useId();
 
-  // Generate fallback visual time-series if none provided
+  // Generate visual time-series if none provided
   const chartData = useMemo<ChartDataPoint[]>(() => {
     if (dataPoints && dataPoints.length > 0) {
       return dataPoints;
@@ -82,14 +85,13 @@ export function ForecastChart({
       return points;
     }
 
-    // Default 24-48h diurnal cycle
+    // Default 48h diurnal cycle
     return Array.from({ length: 48 }, (_, i) => {
       const hourOfDay = i % 24;
-      // Inflow peak at 08:00, outflow peak at 17:00
       const diurnal = Math.sin(((hourOfDay - 8) / 24) * 2 * Math.PI) * 3.5;
       const noise = (Math.sin(i * 3.7) + Math.cos(i * 1.3)) * 0.8;
       const actual = Math.round((diurnal + noise) * 100) / 100;
-      const ewma = Math.round((diurnal * 0.95) * 100) / 100;
+      const ewma = Math.round(diurnal * 0.95 * 100) / 100;
       const var99Lower = Math.round((ewma - 4.2) * 100) / 100;
       const var99Upper = Math.round((ewma + 2.5) * 100) / 100;
 
@@ -105,45 +107,44 @@ export function ForecastChart({
 
   const handleHorizonSelect = (hours: number) => {
     setSelectedHorizon(hours);
-    if (onHorizonChange) {
-      onHorizonChange(hours);
-    }
+    onHorizonChange?.(hours);
   };
 
   return (
-    <div className="terminal-card bg-[#121620] border border-[#1E2536] p-5 shadow-sm">
-      {/* Header & Horizon Toggle Pills */}
+    <div className="relative overflow-hidden rounded-[22px] border border-border bg-surface/85 p-5 backdrop-blur-xl shadow-lg">
+      {/* Header & Horizon Range Pills */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-[#A3E635]" />
-            <h3 className="text-sm font-semibold text-[#F8FAFC]">
-              Net Flow Forecasting & 99% Tail-Risk Envelope ($M)
+            <span className="h-2 w-2 rounded-full bg-accent-blue shadow-[0_0_8px_var(--accent-blue)]" />
+            <h3 className="text-sm font-bold text-foreground">
+              Cash Flow Forecast & 99% Tail-Risk Envelope ($M)
             </h3>
             {mase !== undefined && mase !== null && (
-              <span className="rounded bg-[#A3E635]/15 border border-[#A3E635]/30 px-2 py-0.5 text-[10px] font-mono font-bold text-[#A3E635]">
+              <span className="rounded-lg bg-accent-teal/15 border border-accent-teal/30 px-2 py-0.5 text-[10px] font-mono font-bold text-accent-teal">
                 MASE: {mase.toFixed(2)}
               </span>
             )}
           </div>
-          <p className="text-xs text-[#94A3B8] mt-0.5">
-            Historical Actuals vs Hour-of-Week EWMA (λ=0.3) vs 1st Percentile Basel III VaR
+          <p className="text-xs text-muted mt-0.5">
+            Empirical EWMA (λ=0.3) vs 1st Percentile Basel III VaR
           </p>
         </div>
 
         {/* Horizon Toggle Pills */}
-        <div className="flex items-center rounded-lg bg-[#0B0E14] border border-[#1E2536] p-1 gap-1">
+        <div className="inline-flex items-center rounded-xl border border-border bg-surface-2 p-1 gap-1">
           {horizonOptions.map(({ label, hours }) => {
             const active = selectedHorizon === hours;
             return (
               <button
                 key={label}
+                type="button"
                 onClick={() => handleHorizonSelect(hours)}
                 className={cn(
-                  "rounded-md px-2.5 py-1 text-xs font-mono font-medium transition-all",
+                  "rounded-lg px-2.5 py-1 text-xs font-mono font-medium transition-all duration-150",
                   active
-                    ? "bg-[#A3E635] text-[#0B0E14] font-bold shadow-[0_0_10px_rgba(163,230,53,0.3)]"
-                    : "text-[#94A3B8] hover:text-[#F8FAFC]"
+                    ? "bg-accent-blue text-white font-bold shadow-md shadow-accent-blue/25"
+                    : "text-muted hover:text-foreground"
                 )}
               >
                 {label}
@@ -153,27 +154,41 @@ export function ForecastChart({
         </div>
       </div>
 
-      {/* Chart Canvas */}
+      {/* Composed Chart Canvas */}
       <div className="h-72 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: -15, bottom: 0 }}>
             <defs>
-              <linearGradient id="varGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#38BDF8" stopOpacity={0.25} />
-                <stop offset="95%" stopColor="#38BDF8" stopOpacity={0.02} />
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor={theme.primary} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={theme.primary} stopOpacity={0.02} />
               </linearGradient>
             </defs>
 
-            <CartesianGrid strokeDasharray="3 3" stroke="#1E2536" opacity={0.6} />
-            <XAxis dataKey="hourLabel" stroke="#94A3B8" fontSize={10} tickLine={false} />
-            <YAxis stroke="#94A3B8" fontSize={10} tickLine={false} tickFormatter={(v) => `$${v}M`} />
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} vertical={false} opacity={0.6} />
+            <XAxis
+              dataKey="hourLabel"
+              stroke={theme.axisText}
+              fontSize={10}
+              tickLine={false}
+              axisLine={{ stroke: theme.grid }}
+            />
+            <YAxis
+              stroke={theme.axisText}
+              fontSize={10}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => `$${v}M`}
+            />
             <Tooltip
               contentStyle={{
-                backgroundColor: "#121620",
-                borderColor: "#1E2536",
-                borderRadius: "0.5rem",
-                color: "#F8FAFC",
-                fontSize: 11,
+                backgroundColor: theme.tooltipBg,
+                borderColor: theme.tooltipBorder,
+                borderRadius: "14px",
+                color: theme.tooltipText,
+                fontSize: "12px",
+                boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3)",
+                backdropFilter: "blur(12px)",
               }}
               formatter={(value: unknown, name: unknown) => [
                 `$${String(value ?? 0)}M`,
@@ -182,16 +197,16 @@ export function ForecastChart({
             />
             <Legend
               wrapperStyle={{ fontSize: 11, paddingTop: 10 }}
-              formatter={(value) => <span className="text-[#94A3B8] font-mono">{value}</span>}
+              formatter={(value) => <span style={{ color: theme.axisText }} className="font-mono">{value}</span>}
             />
 
             {/* Shaded 99% VaR Envelope */}
             <Area
               type="monotone"
               dataKey="var99Lower"
-              stroke="#0284c7"
+              stroke={theme.forecastBandStroke}
               strokeDasharray="2 2"
-              fill="url(#varGradient)"
+              fill={`url(#${gradientId})`}
               name="99% VaR Tail Limit"
             />
 
@@ -199,7 +214,7 @@ export function ForecastChart({
             <Line
               type="monotone"
               dataKey="actualNetFlow"
-              stroke="#38BDF8"
+              stroke={theme.actuals}
               strokeWidth={2}
               dot={false}
               name="Historical Net Flow"
@@ -209,7 +224,7 @@ export function ForecastChart({
             <Line
               type="monotone"
               dataKey="ewmaForecast"
-              stroke="#A3E635"
+              stroke={theme.forecastMean}
               strokeWidth={2}
               strokeDasharray="4 4"
               dot={false}

@@ -276,18 +276,25 @@ export default function DashboardPage() {
     return BigInt(sampleBalances.deployedSurplus);
   }, [activeFrame]);
 
-  const netYieldMinor = useMemo<bigint>(() => {
-    if (activeFrame?.portfolio) {
-      const gross = activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
-      const pen = activeFrame.portfolio.cumulativePenaltiesPaid.amountMinor;
-      const od = activeFrame.portfolio.cumulativeOverdraftInterestPaid.amountMinor;
-      const net = gross - pen - od;
-      return net > 0n ? net : 0n;
+  const deficitAmountUsd = useMemo<number>(() => {
+    if (requiredReserveMinor > availableCashMinor) {
+      return Number(requiredReserveMinor - availableCashMinor) / 100;
     }
-    return 0n;
-  }, [activeFrame]);
+    return 0;
+  }, [requiredReserveMinor, availableCashMinor]);
 
-  // 4-Tier Ledger Items derived from activeFrame
+  let netYieldMinor = 342_120_00n;
+  if (activeFrame?.portfolio) {
+    const gross = activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
+    const pen = activeFrame.portfolio.cumulativePenaltiesPaid.amountMinor;
+    const od = activeFrame.portfolio.cumulativeOverdraftInterestPaid.amountMinor;
+    const net = gross - pen - od;
+    netYieldMinor = net > 0n ? net : 0n;
+  } else if (isLive && liveDecision?.expectedNetYieldMinor) {
+    netYieldMinor = BigInt(liveDecision.expectedNetYieldMinor);
+  }
+
+  // 4-Tier Ledger Items
   const tierLedgerItems = useMemo<TierLedgerItem[]>(() => {
     if (activeFrame?.portfolio) {
       const p = activeFrame.portfolio;
@@ -535,10 +542,10 @@ export default function DashboardPage() {
         onStepHour={handleStepHour}
         onSpeedChange={(s) => setPlaybackSpeed(s)}
         source={isFallback ? "offline-fallback" : (liveDecision?.source || replaySource)}
-        solvencyStatus={activeFrame?.liquidityStatus ?? "HEALTHY"}
-        mase={liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? 0.85}
+        solvencyStatus={activeFrame?.liquidityStatus ?? (isLive && liveDecision ? (liveDecision.status as "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED") : "HEALTHY")}
+        mase={isLive ? (liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? null) : 0.85}
         confidence={liveDecision?.confidence ?? 0.99}
-        deficitAmountUsd={0}
+        deficitAmountUsd={deficitAmountUsd}
         onTriggerSweep={handleTriggerSweep}
         onRunStressTest={handleRunStressTest}
         onExportAuditCsv={handleExportAuditCsv}
