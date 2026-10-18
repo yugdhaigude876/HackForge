@@ -27,6 +27,7 @@ export interface RightCommandPanelProps {
   onSettlementDelayChange?: (val: number) => void;
   rateSpikeActive?: boolean;
   onRateSpikeToggle?: (active: boolean) => void;
+  onApplyPreset?: (preset: "normal" | "payday" | "black_swan") => void;
   auditLogs?: Array<{
     id: string;
     timestamp: string;
@@ -71,21 +72,26 @@ export function RightCommandPanel({
   onReset,
   onSpeedChange,
   onJumpPreset,
-  outflowShockPct: initialOutflowShock = 0,
+  outflowShockPct,
   onOutflowShockChange,
-  settlementDelayHours: initialSettlementDelay = 0,
+  settlementDelayHours,
   onSettlementDelayChange,
-  rateSpikeActive: initialRateSpike = false,
+  rateSpikeActive,
   onRateSpikeToggle,
+  onApplyPreset,
   auditLogs = DEFAULT_AUDIT_LOGS,
   totalCashUsd = 50_000_000,
 }: RightCommandPanelProps) {
   // Local states for sliders & speed if not controlled externally
   const [speed, setSpeed] = useState<number>(10);
-  const [outflowShock, setOutflowShock] = useState<number>(initialOutflowShock);
-  const [settlementDelay, setSettlementDelay] = useState<number>(initialSettlementDelay);
-  const [rateSpike, setRateSpike] = useState<boolean>(initialRateSpike);
+  const [localOutflowShock, setLocalOutflowShock] = useState<number>(0);
+  const [localSettlementDelay, setLocalSettlementDelay] = useState<number>(0);
+  const [localRateSpike, setLocalRateSpike] = useState<boolean>(false);
   const terminalRef = useRef<HTMLDivElement>(null);
+
+  const outflowShock = outflowShockPct !== undefined ? outflowShockPct : localOutflowShock;
+  const settlementDelay = settlementDelayHours !== undefined ? settlementDelayHours : localSettlementDelay;
+  const rateSpike = rateSpikeActive !== undefined ? rateSpikeActive : localRateSpike;
 
   // Auto-scroll terminal to bottom when new logs arrive
   useEffect(() => {
@@ -100,18 +106,18 @@ export function RightCommandPanel({
   };
 
   const handleOutflowChange = (val: number) => {
-    setOutflowShock(val);
+    setLocalOutflowShock(val);
     onOutflowShockChange?.(val);
   };
 
   const handleSettlementChange = (val: number) => {
-    setSettlementDelay(val);
+    setLocalSettlementDelay(val);
     onSettlementDelayChange?.(val);
   };
 
   const handleRateSpikeToggle = () => {
     const next = !rateSpike;
-    setRateSpike(next);
+    setLocalRateSpike(next);
     onRateSpikeToggle?.(next);
   };
 
@@ -208,35 +214,45 @@ export function RightCommandPanel({
           </Button>
         </div>
 
-        {/* Fast-jump preset buttons */}
+        {/* 1-Click Crisis Presets */}
         <div className="pt-2 border-t border-[#1E2536]/80 space-y-1.5">
-          <div className="text-[10px] font-mono text-[#94A3B8] uppercase">
-            Fast Jump Benchmarks:
+          <div className="text-[10px] font-mono text-[#94A3B8] uppercase flex items-center justify-between">
+            <span>1-Click Crisis Presets:</span>
+            <span className="text-[9px] text-[#A3E635]">BREAK THE BANK</span>
           </div>
           <div className="grid grid-cols-1 gap-1.5">
             <button
               type="button"
-              onClick={() => onJumpPreset?.(0, "Standard Day")}
-              className="flex items-center justify-between rounded bg-[#121620] hover:bg-[#1A202C] px-2.5 py-1.5 text-left text-[11px] font-medium text-[#F8FAFC] border border-[#1E2536] transition-colors"
+              onClick={() => {
+                onJumpPreset?.(17, "Normal Business Day");
+                onApplyPreset?.("normal");
+              }}
+              className="flex items-center justify-between rounded bg-[#121620] hover:bg-[#1A202C] px-2.5 py-1.5 text-left text-[11px] font-medium text-[#A3E635] border border-[#A3E635]/30 transition-colors"
             >
-              <span>Standard Day Baseline</span>
-              <span className="font-mono text-[10px] text-[#94A3B8]">00:00</span>
+              <span>Normal Business Day</span>
+              <span className="font-mono text-[10px] text-[#94A3B8]">0% Shock · Solvent</span>
             </button>
             <button
               type="button"
-              onClick={() => onJumpPreset?.(8, "Payday Inflow Spike (08:00)")}
-              className="flex items-center justify-between rounded bg-[#121620] hover:bg-[#1A202C] px-2.5 py-1.5 text-left text-[11px] font-medium text-[#22C55E] border border-[#22C55E]/30 transition-colors"
+              onClick={() => {
+                onJumpPreset?.(8, "Payday Morning Surge (08:00)");
+                onApplyPreset?.("payday");
+              }}
+              className="flex items-center justify-between rounded bg-[#121620] hover:bg-[#1A202C] px-2.5 py-1.5 text-left text-[11px] font-medium text-[#38BDF8] border border-[#38BDF8]/30 transition-colors"
             >
-              <span>Payday Inflow Spike</span>
-              <span className="font-mono text-[10px] text-[#22C55E]">08:00 UTC</span>
+              <span>Payday Morning Surge</span>
+              <span className="font-mono text-[10px] text-[#38BDF8]">08:00 Inflow Surge</span>
             </button>
             <button
               type="button"
-              onClick={() => onJumpPreset?.(17, "Afternoon Outflow Run (17:00)")}
-              className="flex items-center justify-between rounded bg-[#121620] hover:bg-[#1A202C] px-2.5 py-1.5 text-left text-[11px] font-medium text-[#818CF8] border border-[#818CF8]/30 transition-colors"
+              onClick={() => {
+                onJumpPreset?.(2, "Black Swan Liquidity Run");
+                onApplyPreset?.("black_swan");
+              }}
+              className="flex items-center justify-between rounded bg-[#EF4444]/15 hover:bg-[#EF4444]/25 px-2.5 py-1.5 text-left text-[11px] font-medium text-[#EF4444] border border-[#EF4444]/40 transition-colors"
             >
-              <span>Afternoon Outflow Run</span>
-              <span className="font-mono text-[10px] text-[#818CF8]">17:00 UTC</span>
+              <span>Black Swan Liquidity Run</span>
+              <span className="font-mono text-[10px] text-[#EF4444] font-bold">+45% Outflow Run</span>
             </button>
           </div>
         </div>
