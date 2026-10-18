@@ -202,7 +202,13 @@ export function withAuth<T = unknown>(
       return response;
     } catch (error) {
       if (error instanceof UnauthenticatedError) {
-        return createErrorResponse(401, "UNAUTHENTICATED", error.message, undefined, requestId);
+        return createErrorResponse(
+          401,
+          "UNAUTHENTICATED",
+          error.message,
+          error.reason ? { reason: error.reason } : undefined,
+          requestId
+        );
       }
 
       if (error instanceof ForbiddenError) {

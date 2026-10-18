@@ -38,10 +38,44 @@ export class AuthError extends Error {
   }
 }
 
+/** Coarse, non-sensitive reason a token was rejected. Safe to return to clients. */
+export type AuthFailureReason =
+  | "token-expired"
+  | "token-revoked"
+  | "wrong-project"
+  | "server-misconfigured"
+  | "invalid-token";
+
 export class UnauthenticatedError extends AuthError {
-  constructor(message = "Authentication required. Missing, invalid, expired or revoked token.") {
+  readonly reason?: AuthFailureReason;
+
+  constructor(
+    message = "Authentication required. Missing, invalid, expired or revoked token.",
+    reason?: AuthFailureReason
+  ) {
     super(401, "UNAUTHENTICATED", message);
+    this.reason = reason;
   }
+}
+
+/**
+ * Maps a Firebase Admin verification error to a coarse reason. Never includes the token or any
+ * credential. "wrong-project" means the token was issued for a different Firebase project than
+ * the one the server's service account belongs to.
+ */
+export function classifyAuthFailure(err: unknown): AuthFailureReason {
+  const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : "";
+  const message = err instanceof Error ? err.message : String(err ?? "");
+  if (code === "auth/id-token-expired") return "token-expired";
+  if (code === "auth/id-token-revoked") return "token-revoked";
+  if (/incorrect "aud"|incorrect "iss"|audience|issuer/i.test(message)) return "wrong-project";
+  if (
+    err instanceof Error &&
+    (err.name === "MissingFirebaseAdminConfigError" || /FIREBASE_SERVICE_ACCOUNT_JSON|credential/i.test(message))
+  ) {
+    return "server-misconfigured";
+  }
+  return "invalid-token";
 }
 
 export class ForbiddenError extends AuthError {
@@ -151,8 +185,9 @@ export async function requireUser(request: Request | NextRequest): Promise<Authe
   try {
     return await activeTokenVerifier.verifyIdToken(idToken, true);
   } catch (err) {
-    console.error("Token verification failed:", err);
-    throw new UnauthenticatedError("Invalid, expired or revoked ID token.");
+    const reason = classifyAuthFailure(err);
+    console.error(`Token verification failed (reason=${reason}):`, err);
+    throw new UnauthenticatedError("Invalid, expired or revoked ID token.", reason);
   }
 }
 
