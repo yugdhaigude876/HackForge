@@ -11,7 +11,10 @@
     "test:watch": "vitest",
     "test:rules": "firebase emulators:exec --project demo-reserve-juggler \"vitest run --config vitest.rules.config.mts\"",
     "test:e2e": "playwright test",
-    "seed:member": "node scripts/seed-member.mjs"
+    "seed:member": "tsx scripts/seed-member.ts"
+  },
+  "engines": {
+    "node": "22.x"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

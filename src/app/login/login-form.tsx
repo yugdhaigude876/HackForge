@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { Card, Button, Input, Label, Badge } from "@/components/ui/primitives";
+import { BrandLogo } from "@/components/brand/logo";
 import {
   ShieldCheck,
   Lock,
@@ -131,9 +132,7 @@ export function LoginForm() {
       <div className="relative w-full max-w-md space-y-6">
         {/* Logo and Terminal Brand Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-primary/30 bg-primary/10 text-primary shadow-lg shadow-primary/10">
-            <ShieldCheck className="h-6 w-6" />
-          </div>
+          <BrandLogo size={72} className="shadow-lg shadow-primary/10" label="Reserve Juggler logo" />
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">Reserve Juggler</h1>
             <p className="text-xs uppercase tracking-widest text-muted">Institutional Liquidity & Risk Terminal</p>

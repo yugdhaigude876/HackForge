@@ -10,6 +10,8 @@ interface KpiGridProps {
   netYieldMinor: bigint;
   annualizedApyPct?: number;
   avoidedOverdraftFeesMinor?: bigint;
+  yieldEarnedVsNaiveMinor?: bigint;
+  simulationSeed?: string | number;
   isLive?: boolean;
 }
 
@@ -19,7 +21,9 @@ export function KpiGrid({
   deployableSurplusMinor,
   netYieldMinor,
   annualizedApyPct = 4.62,
-  avoidedOverdraftFeesMinor = 120_000_000n, // $1.2M default avoided
+  avoidedOverdraftFeesMinor,
+  yieldEarnedVsNaiveMinor,
+  simulationSeed,
   isLive = true,
 }: KpiGridProps) {
   return (
@@ -116,9 +120,46 @@ export function KpiGrid({
               (+{formatCompactMinor(netYieldMinor)})
             </span>
           </div>
-          <p className="mt-1 text-[11px] text-[#94A3B8]">
-            Overdraft fees avoided: {formatCompactMinor(avoidedOverdraftFeesMinor)}
-          </p>
+          <div className="mt-1 space-y-0.5 text-[11px] text-[#94A3B8]">
+            <p>
+              Avoided overdraft cost:{" "}
+              {avoidedOverdraftFeesMinor !== undefined && simulationSeed ? (
+                <span className="font-mono text-[#F8FAFC]">
+                  {formatCompactMinor(avoidedOverdraftFeesMinor)}
+                  <span className="ml-1 text-[10px] text-[#94A3B8]">
+                    (Simulated, seed {simulationSeed})
+                  </span>
+                </span>
+              ) : (
+                <span
+                  title="Run the replay to compute"
+                  className="cursor-help font-mono text-[#94A3B8]"
+                  data-testid="avoided-overdraft-uncomputed"
+                >
+                  —
+                </span>
+              )}
+            </p>
+            <p>
+              Yield earned vs naive:{" "}
+              {yieldEarnedVsNaiveMinor !== undefined && simulationSeed ? (
+                <span className="font-mono text-[#22C55E]">
+                  +{formatCompactMinor(yieldEarnedVsNaiveMinor)}
+                  <span className="ml-1 text-[10px] text-[#94A3B8]">
+                    (Simulated, seed {simulationSeed})
+                  </span>
+                </span>
+              ) : (
+                <span
+                  title="Run the replay to compute"
+                  className="cursor-help font-mono text-[#94A3B8]"
+                  data-testid="yield-vs-naive-uncomputed"
+                >
+                  —
+                </span>
+              )}
+            </p>
+          </div>
         </div>
 
         <div className="mt-3 flex items-center justify-between pt-2.5 border-t border-[#1E2536] text-[10px] font-mono">

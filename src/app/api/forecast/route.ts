@@ -4,7 +4,6 @@ import { generateTransactions } from "@/engine/generator";
 import { buildContinuousTimeSeries, createRollingWindows } from "@/engine/timeseries";
 import { Money } from "@/engine/money";
 import { forecastsRepo } from "@/server/repositories/forecasts";
-import { requireOrgMember } from "@/server/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -109,73 +108,85 @@ function generateFallbackForecast(horizonHours = 24) {
   };
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  try {
-    const orgId = request.headers.get("x-org-id");
-    if (orgId) {
-      try {
-        await requireOrgMember(request, orgId, "viewer");
-        const list = await forecastsRepo.list(orgId, { limit: 1 });
-        if (list.length > 0) {
-          const latest = list[0];
-          return NextResponse.json({
-            ok: true,
-            data: {
-              forecastId: latest.id,
-              source: latest.source ?? "live",
-              asOf: latest.asOf instanceof Date ? latest.asOf.toISOString() : String(latest.asOf),
-              method: latest.method,
+import { withAuth } from "@/server/with-auth";
+import { enforceRateLimit } from "@/server/rate-limiter";
+import type { OrgAuthContext } from "@/server/auth";
+
+export const GET = withAuth(
+  async function getForecastRoute(
+    _request: NextRequest,
+    authContext: OrgAuthContext
+  ): Promise<NextResponse> {
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "forecast.read",
+      orgId: authContext.orgId,
+      uid: authContext.user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
+    try {
+      const list = await forecastsRepo.list(authContext.orgId, { limit: 1 });
+      if (list.length > 0) {
+        const latest = list[0];
+        return NextResponse.json({
+          ok: true,
+          data: {
+            forecastId: latest.id,
+            source: latest.source ?? "live",
+            asOf: latest.asOf instanceof Date ? latest.asOf.toISOString() : String(latest.asOf),
+            method: latest.method,
+            horizonHours: latest.horizon,
+            points: latest.points.map((p) => ({
+              ts: p.ts instanceof Date ? p.ts.toISOString() : String(p.ts),
+              meanMinor: p.meanMinor,
+              bandLowerMinor: p.bandLowerMinor,
+              bandUpperMinor: p.bandUpperMinor,
+            })),
+            evaluation: {
+              windowCount: latest.backtest?.sampleSize ?? 96,
               horizonHours: latest.horizon,
-              points: latest.points.map((p) => ({
-                ts: p.ts instanceof Date ? p.ts.toISOString() : String(p.ts),
-                meanMinor: p.meanMinor,
-                bandLowerMinor: p.bandLowerMinor,
-                bandUpperMinor: p.bandUpperMinor,
-              })),
-              evaluation: {
-                windowCount: latest.backtest?.sampleSize ?? 96,
-                horizonHours: latest.horizon,
-                tau: 0.95,
-                model: {
-                  name: latest.method,
-                  mase: latest.backtest?.mase ?? 0.85,
-                  pinballLoss: latest.backtest?.pinball ?? 1420,
-                  maeDollars: 18500,
-                  maeMinor: 1850000,
+              tau: 0.95,
+              model: {
+                name: latest.method,
+                mase: latest.backtest?.mase ?? 0.85,
+                pinballLoss: latest.backtest?.pinball ?? 1420,
+                maeDollars: 18500,
+                maeMinor: 1850000,
+              },
+              seasonalNaive: {
+                name: "Seasonal Naive (168h lag)",
+                mase: 1.0,
+                pinballLoss: 1680,
+                maeDollars: 22400,
+                maeMinor: 2240000,
+              },
+              naive: {
+                name: "Naive (Flat line)",
+                mase: 1.42,
+                pinballLoss: 2150,
+                maeDollars: 31200,
+                maeMinor: 3120000,
+              },
+              skillScores: {
+                vsSeasonalNaive: {
+                  mase: { skill: 0.18, isBetter: true },
+                  pinball: { skill: 0.155, isBetter: true },
+                  mae: { skill: 0.174, isBetter: true },
                 },
-                seasonalNaive: {
-                  name: "Seasonal Naive (168h lag)",
-                  mase: 1.0,
-                  pinballLoss: 1680,
-                  maeDollars: 22400,
-                  maeMinor: 2240000,
-                },
-                naive: {
-                  name: "Naive (Flat line)",
-                  mase: 1.42,
-                  pinballLoss: 2150,
-                  maeDollars: 31200,
-                  maeMinor: 3120000,
-                },
-                skillScores: {
-                  vsSeasonalNaive: {
-                    mase: { skill: 0.18, isBetter: true },
-                    pinball: { skill: 0.155, isBetter: true },
-                    mae: { skill: 0.174, isBetter: true },
-                  },
-                  vsNaive: {
-                    mase: { skill: 0.422, isBetter: true },
-                    pinball: { skill: 0.339, isBetter: true },
-                    mae: { skill: 0.407, isBetter: true },
-                  },
+                vsNaive: {
+                  mase: { skill: 0.422, isBetter: true },
+                  pinball: { skill: 0.339, isBetter: true },
+                  mae: { skill: 0.407, isBetter: true },
                 },
               },
             },
-          });
-        }
-      } catch {
-        // Fall back to clean deterministic generated forecast
+          },
+        });
       }
+    } catch {
+      // Continue to deterministic fallback
     }
 
     const fallback = generateFallbackForecast();
@@ -183,17 +194,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ok: true,
       data: fallback,
     });
-  } catch (err) {
-    console.warn("[GET /api/forecast] Using fallback due to:", err);
-    return NextResponse.json({
-      ok: true,
-      data: generateFallbackForecast(),
-    });
-  }
-}
+  },
+  { minRole: "viewer" }
+);
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  try {
+export const POST = withAuth(
+  async function postForecastRoute(
+    request: NextRequest,
+    authContext: OrgAuthContext
+  ): Promise<NextResponse> {
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "forecast.generate",
+      orgId: authContext.orgId,
+      uid: authContext.user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
     let horizonHours = 24;
     try {
       const body = await request.json();
@@ -209,11 +227,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ok: true,
       data: forecast,
     });
-  } catch (err) {
-    console.warn("[POST /api/forecast] Using fallback due to:", err);
-    return NextResponse.json({
-      ok: true,
-      data: generateFallbackForecast(),
-    });
-  }
-}
+  },
+  { minRole: "analyst" }
+);

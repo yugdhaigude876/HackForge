@@ -2,6 +2,7 @@
 
 import { Clock, Download, Play, ShieldAlert, ShieldCheck, AlertTriangle, Menu } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
+import { BrandLogo } from "@/components/brand/logo";
 
 interface TopBarProps {
   clockTimestamp?: string;
@@ -12,6 +13,7 @@ interface TopBarProps {
   mase?: number | null;
   confidence?: number;
   deficitAmountUsd?: number;
+  source?: string;
   isPlaying?: boolean;
   playbackSpeed?: number;
   onPlayToggle?: () => void;
@@ -32,6 +34,7 @@ export function TopBar({
   mase = 0.85,
   confidence = 0.99,
   deficitAmountUsd = 0,
+  source,
   isPlaying = false,
   playbackSpeed = 10,
   onPlayToggle,
@@ -55,6 +58,7 @@ export function TopBar({
         >
           <Menu className="h-5 w-5" />
         </Button>
+        <BrandLogo size={30} className="lg:hidden" />
 
         {/* Simulation Clock Readout */}
         <div className="flex items-center gap-2 rounded-lg bg-[#121620] border border-[#1E2536] px-3 py-1.5 font-mono text-xs text-[#F8FAFC]">
@@ -144,6 +148,16 @@ export function TopBar({
 
       {/* Right: Master Solvency Badge & Quick Actions */}
       <div className="flex items-center gap-3">
+        {source === "offline-fallback" && (
+          <div
+            data-testid="fallback-badge"
+            className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 px-3 py-1.5 text-xs font-bold text-amber-300 font-mono shadow-[0_0_12px_rgba(245,158,11,0.2)]"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
+            <span>Offline fallback</span>
+          </div>
+        )}
+
         {/* Master Solvency Status Badge */}
         {solvencyStatus === "HEALTHY" ? (
           <div

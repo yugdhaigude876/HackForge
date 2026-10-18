@@ -6,11 +6,13 @@ import { Menu, X, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { useAuth } from "@/lib/firebase/auth-context";
+import { useDataSource } from "@/components/providers/data-source-provider";
 import { Sidebar } from "./sidebar";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const { user, isMock, signOut } = useAuth();
+  const { source } = useDataSource();
   const router = useRouter();
 
   const handleSignOut = async () => {
@@ -67,7 +69,14 @@ export function AppShell({ children }: { children: ReactNode }) {
 
           <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
-            {isMock ? (
+            {source === "offline-fallback" ? (
+              <span
+                data-testid="top-bar-fallback-badge"
+                className="rounded bg-amber-500/20 px-2 py-0.5 font-mono text-[10px] font-bold text-amber-400 border border-amber-500/40"
+              >
+                Offline fallback
+              </span>
+            ) : isMock ? (
               <span className="rounded bg-[#38BDF8]/15 px-2 py-0.5 font-mono text-[10px] font-bold text-[#38BDF8] border border-[#38BDF8]/30">
                 Demo Auth
               </span>

@@ -76,12 +76,30 @@ export const GET = withAuth(
   { minRole: "viewer" }
 );
 
+import { enforceRateLimit } from "@/server/rate-limiter";
+
 /**
  * POST /api/decisions
- * Alias for POST /api/engine/decision
+ * Alias for POST /api/engine/decision.
+ * Requires withAuth (minRole: analyst) and durable rate limiting.
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  const { POST: engineDecisionPost } = await import("@/app/api/engine/decision/route");
-  return engineDecisionPost(request);
-}
+export const POST = withAuth(
+  async function decisionsPostRoute(
+    request: NextRequest,
+    authContext: OrgAuthContext
+  ): Promise<NextResponse> {
+    const rateLimitError = await enforceRateLimit({
+      routeKey: "engine.decision",
+      orgId: authContext.orgId,
+      uid: authContext.user.uid,
+    });
+    if (rateLimitError) {
+      return rateLimitError;
+    }
+
+    const { POST: engineDecisionPost } = await import("@/app/api/engine/decision/route");
+    return engineDecisionPost(request);
+  },
+  { minRole: "analyst" }
+);
 

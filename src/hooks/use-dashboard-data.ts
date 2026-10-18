@@ -3,7 +3,20 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { apiFetch } from "@/lib/api-client";
-import type { DashboardSummaryPayload } from "@/app/api/dashboard/summary/route";
+import type {
+  DashboardSummaryPayload as ServerDashboardSummaryPayload,
+  SerializedDecision,
+  SerializedForecast,
+} from "@/app/api/dashboard/summary/route";
+
+/** Source labels the client can show. "offline-fallback" never comes from the server. */
+export type ClientDataSource = NonNullable<SerializedDecision["source"]> | "offline-fallback";
+
+/** Server payload with the client-only "offline-fallback" source label allowed. */
+export type DashboardSummaryPayload = Omit<ServerDashboardSummaryPayload, "decision" | "forecast"> & {
+  decision: (Omit<SerializedDecision, "source"> & { source?: ClientDataSource }) | null;
+  forecast: (Omit<SerializedForecast, "source"> & { source?: ClientDataSource }) | null;
+};
 
 export type DashboardStatus =
   | "loading"
@@ -26,6 +39,8 @@ export interface UseDashboardDataResult {
   data: DashboardSummaryPayload | null;
   error: string | null;
   retryAfterSeconds: number | null;
+  isFallback: boolean;
+  fallbackRequestId: string | null;
   refresh: () => Promise<void>;
   run: (options?: RunEngineOptions) => Promise<boolean>;
   isRunning: boolean;
@@ -121,12 +136,26 @@ export const SEEDED_DASHBOARD_PAYLOAD: DashboardSummaryPayload = {
   userRole: "operator",
 };
 
+export const OFFLINE_FALLBACK_DASHBOARD_PAYLOAD: DashboardSummaryPayload = {
+  ...SEEDED_DASHBOARD_PAYLOAD,
+  decision: {
+    ...SEEDED_DASHBOARD_PAYLOAD.decision!,
+    source: "offline-fallback",
+  },
+  forecast: {
+    ...SEEDED_DASHBOARD_PAYLOAD.forecast!,
+    source: "offline-fallback",
+  },
+};
+
 export function useDashboardData(): UseDashboardDataResult {
   const { user, isMock } = useAuth();
   const [internalStatus, setInternalStatus] = useState<DashboardStatus>("loading");
   const [data, setData] = useState<DashboardSummaryPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
+  const [isFallback, setIsFallback] = useState<boolean>(false);
+  const [fallbackRequestId, setFallbackRequestId] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
 
   const isLive = Boolean(user && !isMock);
@@ -156,11 +185,47 @@ export function useDashboardData(): UseDashboardDataResult {
     return () => clearInterval(interval);
   }, [retryAfterSeconds]);
 
+  const handleFetchFailure = useCallback((resStatus: number, errObj?: { message?: string; details?: unknown }, reqId?: string) => {
+    if (resStatus === 401 || resStatus === 403) {
+      const msg = resStatus === 401
+        ? "Authentication required. Please sign in with an authorised account to view live telemetry."
+        : (errObj?.message || "Permission denied. Please ask an organisation admin for access.");
+      setInternalStatus("error");
+      setError(msg);
+      setData(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (resStatus === 429) {
+      const details = errObj?.details as { retryAfterSeconds?: number } | undefined;
+      const retrySec = details?.retryAfterSeconds ?? 10;
+      setRetryAfterSeconds(retrySec);
+      setInternalStatus("error");
+      setError(errObj?.message || `Rate limit exceeded. Please wait ${retrySec}s before retrying.`);
+      setData(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    // 5xx / Network / Timeout -> honest offline fallback
+    console.warn(`[useDashboardData] Server error (HTTP ${resStatus}), falling back to local engine sample data`);
+    setData(OFFLINE_FALLBACK_DASHBOARD_PAYLOAD);
+    setInternalStatus("ready");
+    setError(null);
+    setIsFallback(true);
+    setFallbackRequestId(reqId || null);
+  }, []);
+
   const fetchSummary = useCallback(async () => {
     if (!isLive) {
       setInternalStatus("unauthenticated");
       setData(null);
       setError(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
       return;
     }
 
@@ -173,33 +238,21 @@ export function useDashboardData(): UseDashboardDataResult {
 
       if (res.ok) {
         setData(res.data);
+        setIsFallback(false);
+        setFallbackRequestId(null);
         if (!res.data.decision && !res.data.forecast) {
           setInternalStatus("empty");
         } else {
           setInternalStatus("ready");
         }
       } else {
-        const errorMessage =
-          res.status === 429
-            ? "Rate limit exceeded. Please wait before retrying."
-            : res.error?.message || "Request failed";
-        setInternalStatus("error");
-        setError(errorMessage);
-        setData(null);
-        if (res.status === 429 && res.error?.details) {
-          const details = res.error.details as { retryAfterSeconds?: number };
-          if (typeof details.retryAfterSeconds === "number") {
-            setRetryAfterSeconds(details.retryAfterSeconds);
-          }
-        }
+        handleFetchFailure(res.status, res.error, res.requestId);
       }
     } catch (err) {
       if (unmountedRef.current) return;
-      setInternalStatus("error");
-      setError(err instanceof Error ? err.message : "Request failed");
-      setData(null);
+      handleFetchFailure(500, { message: err instanceof Error ? err.message : "Network error" });
     }
-  }, [isLive]);
+  }, [isLive, handleFetchFailure]);
 
   // Initial load on mount or auth change
   useEffect(() => {
@@ -214,32 +267,26 @@ export function useDashboardData(): UseDashboardDataResult {
         if (cancelled || unmountedRef.current) return;
         if (res.ok) {
           setData(res.data);
+          setIsFallback(false);
+          setFallbackRequestId(null);
           if (!res.data.decision && !res.data.forecast) {
             setInternalStatus("empty");
           } else {
             setInternalStatus("ready");
           }
         } else {
-          const errorMessage =
-            res.status === 429
-              ? "Rate limit exceeded. Please wait before retrying."
-              : res.error?.message || "Request failed";
-          setInternalStatus("error");
-          setError(errorMessage);
-          setData(null);
+          handleFetchFailure(res.status, res.error, res.requestId);
         }
       })
       .catch((err) => {
         if (cancelled || unmountedRef.current) return;
-        setInternalStatus("error");
-        setError(err instanceof Error ? err.message : "Request failed");
-        setData(null);
+        handleFetchFailure(500, { message: err instanceof Error ? err.message : "Network error" });
       });
 
     return () => {
       cancelled = true;
     };
-  }, [isLive]);
+  }, [isLive, handleFetchFailure]);
 
   const run = useCallback(
     async (options?: RunEngineOptions): Promise<boolean> => {
@@ -259,7 +306,17 @@ export function useDashboardData(): UseDashboardDataResult {
             setData(res.data);
             setInternalStatus("ready");
             setRetryAfterSeconds(null);
+            setIsFallback(false);
+            setFallbackRequestId(null);
             return true;
+          }
+
+          if (res.status === 401 || res.status === 403) {
+            const msg = res.status === 401
+              ? "Authentication required. Please sign in to run the treasury engine."
+              : (res.error?.message || "Permission denied. Analyst role required to execute engine.");
+            setError(msg);
+            return false;
           }
 
           if (res.status === 429) {
@@ -269,6 +326,14 @@ export function useDashboardData(): UseDashboardDataResult {
             setError(res.error.message || `Rate limited. Please wait ${retrySec}s.`);
             return false;
           }
+
+          // 5xx on run
+          console.warn(`[useDashboardData.run] Server error (HTTP ${res.status}), activating offline fallback`);
+          setData(OFFLINE_FALLBACK_DASHBOARD_PAYLOAD);
+          setInternalStatus("ready");
+          setIsFallback(true);
+          setFallbackRequestId(res.requestId || null);
+          return true;
         }
 
         // Offline / demo / fallback run: simulate calculation and update data immediately
@@ -279,9 +344,11 @@ export function useDashboardData(): UseDashboardDataResult {
         return true;
       } catch (err) {
         if (unmountedRef.current) return false;
-        console.warn("[useDashboardData.run] Fallback calculation executed:", err);
-        setData(SEEDED_DASHBOARD_PAYLOAD);
+        console.warn("[useDashboardData.run] Network exception, activating offline fallback:", err);
+        setData(OFFLINE_FALLBACK_DASHBOARD_PAYLOAD);
         setInternalStatus("ready");
+        setIsFallback(true);
+        setFallbackRequestId(null);
         return true;
       } finally {
         if (!unmountedRef.current) {
@@ -297,6 +364,8 @@ export function useDashboardData(): UseDashboardDataResult {
     data: currentData,
     error,
     retryAfterSeconds,
+    isFallback,
+    fallbackRequestId,
     refresh: fetchSummary,
     run,
     isRunning,

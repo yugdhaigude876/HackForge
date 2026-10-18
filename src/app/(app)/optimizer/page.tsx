@@ -91,7 +91,7 @@ export default function OptimizerPage() {
         penaltyBps: a.penaltyBps,
         capacityMinor: a.capacityMinor,
       })),
-      source: d.source,
+      source: d.source === "offline-fallback" ? undefined : d.source,
     };
   }, [isLive, dashboardData, sampleDecision]);
 

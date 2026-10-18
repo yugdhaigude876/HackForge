@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { apiFetch } from "@/lib/api-client";
 import { Badge } from "@/components/ui/primitives";
+import { FallbackBanner } from "@/components/ui/fallback-banner";
+import { useDataSource } from "@/components/providers/data-source-provider";
 import {
   TrendingUp,
   AlertTriangle,
@@ -30,7 +32,7 @@ import { sampleNetFlow } from "@/lib/sample-data";
 
 interface ForecastAnalyticsData {
   forecastId: string | null;
-  source: "synthetic" | "import" | "live" | null;
+  source: "synthetic" | "import" | "live" | "offline-fallback" | null;
   asOf: string | null;
   seed: string | number | null;
   method: string | null;
@@ -143,13 +145,93 @@ const SEEDED_FORECAST_DATA: ForecastAnalyticsData = {
   },
 };
 
+const OFFLINE_FALLBACK_FORECAST_DATA: ForecastAnalyticsData = {
+  ...SEEDED_FORECAST_DATA,
+  source: "offline-fallback",
+};
+
 export default function ForecastPage() {
   const { user, isMock } = useAuth();
+  const { setSource } = useDataSource();
   const [data, setData] = useState<ForecastAnalyticsData | null>(SEEDED_FORECAST_DATA);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
+  const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
+  const [isFallback, setIsFallback] = useState(false);
+  const [fallbackRequestId, setFallbackRequestId] = useState<string | null>(null);
 
   const isLive = Boolean(user && !isMock);
+
+  // Sync top bar source
+  useEffect(() => {
+    if (isFallback) {
+      setSource("offline-fallback");
+    } else if (isLive && data?.source) {
+      setSource(data.source === "import" ? "live" : data.source);
+    } else {
+      setSource(null);
+    }
+  }, [isFallback, isLive, data?.source, setSource]);
+
+  // Countdown timer for 429
+  useEffect(() => {
+    if (retryAfterSeconds === null || retryAfterSeconds <= 0) return;
+    const interval = setInterval(() => {
+      setRetryAfterSeconds((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [retryAfterSeconds]);
+
+  const handleFetchResult = (res: { ok: boolean; status: number; data?: ForecastAnalyticsData; error?: { message?: string; details?: unknown }; requestId?: string }) => {
+    if (res.ok && res.data) {
+      const payload = (res.data as unknown as { data?: ForecastAnalyticsData })?.data ?? res.data;
+      setData(payload?.forecastId ? payload : OFFLINE_FALLBACK_FORECAST_DATA);
+      setError(null);
+      setErrorStatus(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      const msg = res.status === 401
+        ? "Authentication required. Please sign in with an authorised account to view live forecast analytics."
+        : (res.error?.message ? (res.error.message.includes("Permission denied") ? res.error.message : `Permission denied: ${res.error.message}`) : "Permission denied. Analyst or viewer role required.");
+      setError(msg);
+      setErrorStatus(res.status);
+      setData(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (res.status === 429) {
+      const details = res.error?.details as { retryAfterSeconds?: number } | undefined;
+      const retrySec = details?.retryAfterSeconds ?? 10;
+      setRetryAfterSeconds(retrySec);
+      setError(res.error?.message || `Rate limit exceeded. Please wait ${retrySec}s before retrying.`);
+      setErrorStatus(429);
+      setData(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    // 5xx / Network / Timeout: honest offline fallback
+    console.warn(`[ForecastPage] Server error (HTTP ${res.status}), activating offline fallback`);
+    setData(OFFLINE_FALLBACK_FORECAST_DATA);
+    setError(null);
+    setErrorStatus(null);
+    setIsFallback(true);
+    setFallbackRequestId(res.requestId || null);
+  };
 
   const fetchForecastAnalytics = async () => {
     setIsLoading(true);
@@ -157,40 +239,37 @@ export default function ForecastPage() {
 
     try {
       const res = await apiFetch<ForecastAnalyticsData>("/api/analytics/forecast");
-      if (res.ok) {
-        const payload = (res.data as unknown as { data?: ForecastAnalyticsData })?.data ?? res.data;
-        setData(payload?.forecastId ? payload : SEEDED_FORECAST_DATA);
-      } else {
-        console.warn("[ForecastPage] Non-200, activating engine fallback");
-        setData(SEEDED_FORECAST_DATA);
-      }
+      handleFetchResult(res);
     } catch (err) {
-      console.warn("[ForecastPage] Exception, activating engine fallback:", err);
-      setData(SEEDED_FORECAST_DATA);
+      console.warn("[ForecastPage] Network exception, activating offline fallback:", err);
+      setData(OFFLINE_FALLBACK_FORECAST_DATA);
+      setError(null);
+      setErrorStatus(null);
+      setIsFallback(true);
+      setFallbackRequestId(null);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!isLive) {
-      return;
-    }
+    // Signed-out and mock sessions keep the initial sample state (data starts as SEEDED_FORECAST_DATA).
+    if (!isLive) return;
 
     let cancelled = false;
     apiFetch<ForecastAnalyticsData>("/api/analytics/forecast")
       .then((res) => {
         if (cancelled) return;
-        if (res.ok) {
-          const payload = (res.data as unknown as { data?: ForecastAnalyticsData })?.data ?? res.data;
-          setData(payload?.forecastId ? payload : SEEDED_FORECAST_DATA);
-        } else {
-          setData(SEEDED_FORECAST_DATA);
-        }
+        handleFetchResult(res);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          setData(SEEDED_FORECAST_DATA);
+          console.warn("[ForecastPage] Network exception on mount, activating offline fallback:", err);
+          setData(OFFLINE_FALLBACK_FORECAST_DATA);
+          setError(null);
+          setErrorStatus(null);
+          setIsFallback(true);
+          setFallbackRequestId(null);
         }
       })
       .finally(() => {
@@ -201,7 +280,6 @@ export default function ForecastPage() {
       cancelled = true;
     };
   }, [isLive]);
-
 
   // Chart data: Sample fallback or generated synthetic series
   const chartData = useMemo(() => {
@@ -221,6 +299,13 @@ export default function ForecastPage() {
   }, []);
 
   const renderSourceBadge = () => {
+    if (isFallback || data?.source === "offline-fallback") {
+      return (
+        <Badge tone="warning" data-testid="fallback-badge">
+          Offline fallback
+        </Badge>
+      );
+    }
     if (!isLive) {
       return (
         <Badge tone="info" data-testid="sample-data-badge">
@@ -293,13 +378,39 @@ export default function ForecastPage() {
         </div>
       )}
 
+      {/* Persistent Offline Fallback Banner */}
+      {isFallback && (
+        <FallbackBanner
+          onRetry={fetchForecastAnalytics}
+          requestId={fallbackRequestId}
+          isRetrying={isLoading}
+        />
+      )}
+
       {/* Error state */}
       {isLive && error && (
-        <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive space-y-2">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>Failed to load forecast analytics: {error}</span>
+            <span>{error}</span>
           </div>
+          {errorStatus === 401 ? (
+            <p className="text-xs text-muted-foreground">
+              Please{" "}
+              <Link href="/login" className="font-semibold underline underline-offset-2 hover:text-foreground">
+                sign in to your organisation account
+              </Link>{" "}
+              to access live rolling backtest analytics.
+            </p>
+          ) : errorStatus === 403 ? (
+            <p className="text-xs text-muted-foreground">
+              Your member account lacks sufficient permissions. Ask an organisation admin to grant you analyst access.
+            </p>
+          ) : errorStatus === 429 ? (
+            <p className="text-xs text-muted-foreground font-mono">
+              Retry available in {retryAfterSeconds ?? 10} seconds.
+            </p>
+          ) : null}
         </div>
       )}
 

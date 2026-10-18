@@ -10,6 +10,8 @@ import { AssetAllocationDonut } from "@/components/dashboard/asset-allocation-do
 import { TierLedgerTable, type TierLedgerItem } from "@/components/dashboard/tier-ledger-table";
 import { RightCommandPanel } from "@/components/dashboard/right-command-panel";
 import { LoadingState, ErrorState } from "@/components/finance/panels";
+import { FallbackBanner } from "@/components/ui/fallback-banner";
+import { useDataSource, type DataSource } from "@/components/providers/data-source-provider";
 import { Button } from "@/components/ui/primitives";
 import { sampleBalances, sampleNetFlow } from "@/lib/sample-data";
 import { ShieldAlert, Play, Loader2 } from "lucide-react";
@@ -44,11 +46,14 @@ const sampleForecastPredictions = [
 
 export default function DashboardPage() {
   const { user, isMock } = useAuth();
+  const { setSource } = useDataSource();
   const {
     status,
     data,
     error,
     retryAfterSeconds,
+    isFallback,
+    fallbackRequestId,
     refresh,
     run,
     isRunning,
@@ -61,6 +66,16 @@ export default function DashboardPage() {
   // Real or synthetic decision & forecast
   const liveDecision = data?.decision ?? null;
   const liveForecast = data?.forecast ?? null;
+
+  useEffect(() => {
+    if (isFallback) {
+      setSource("offline-fallback");
+    } else if (isLive && liveDecision?.source) {
+      setSource(liveDecision.source as DataSource);
+    } else {
+      setSource(null);
+    }
+  }, [isFallback, isLive, liveDecision?.source, setSource]);
 
   // Replay simulation state
   const [replayHour, setReplayHour] = useState<number>(17);
@@ -449,6 +464,17 @@ export default function DashboardPage() {
 
   // Top Bar Badge
   const renderBadge = () => {
+    if (isFallback || liveDecision?.source === "offline-fallback" || liveForecast?.source === "offline-fallback") {
+      return (
+        <span
+          data-testid="fallback-badge"
+          className="rounded bg-amber-500/20 px-2.5 py-1 font-mono text-[11px] font-bold text-amber-400 border border-amber-500/40"
+        >
+          Offline fallback
+        </span>
+      );
+    }
+
     if (!isLive) {
       return (
         <span
@@ -494,6 +520,7 @@ export default function DashboardPage() {
         onPlayToggle={handlePlayToggle}
         onStepHour={handleStepHour}
         onSpeedChange={(s) => setPlaybackSpeed(s)}
+        source={isFallback ? "offline-fallback" : (liveDecision?.source || undefined)}
         solvencyStatus={
           isLive && liveDecision
             ? (liveDecision.status as "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED")
@@ -515,6 +542,11 @@ export default function DashboardPage() {
           a.click();
         }}
       />
+
+      {/* Persistent Offline Fallback Banner */}
+      {isFallback && (
+        <FallbackBanner onRetry={refresh} requestId={fallbackRequestId} />
+      )}
 
 
       {/* Sub-header: Data badges & Run Engine action */}
@@ -639,7 +671,6 @@ export default function DashboardPage() {
               deployableSurplusMinor={deployableSurplusMinor}
               netYieldMinor={netYieldMinor}
               annualizedApyPct={4.62}
-              avoidedOverdraftFeesMinor={120_000_000n}
               isLive={isLive}
             />
 

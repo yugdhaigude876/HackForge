@@ -64,5 +64,55 @@ describe("Health and Readiness Endpoints", () => {
       expect(JSON.stringify(data)).not.toContain("private_key");
       expect(JSON.stringify(data)).not.toContain("connection refused");
     });
+
+    it("returns HTTP 503 degraded (never 500) when admin module fails to load entirely", async () => {
+      vi.spyOn(adminModule, "getAdminFirestore").mockImplementation(() => {
+        throw new adminModule.MissingFirebaseAdminConfigError("Failed to load firebase-admin/firestore: Cannot find module");
+      });
+
+      const res = await readyGet();
+      expect(res.status).toBe(503);
+
+      const data = await res.json();
+      expect(data).toEqual({ ok: false, status: "degraded" });
+    });
+  });
+
+  describe("withAuth behavior when admin module fails to load", () => {
+    it("returns 400 for missing x-org-id without loading admin module (never 500)", async () => {
+      const { withAuth } = await import("@/server/with-auth");
+      const { NextRequest } = await import("next/server");
+
+      const handler = withAuth(async () => {
+        throw new Error("Should not be called");
+      });
+
+      const req = new NextRequest("http://localhost:3000/api/decisions");
+      const res = await handler(req);
+
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.ok).toBe(false);
+      expect(json.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("returns 401 for missing Authorization header without loading admin module (never 500)", async () => {
+      const { withAuth } = await import("@/server/with-auth");
+      const { NextRequest } = await import("next/server");
+
+      const handler = withAuth(async () => {
+        throw new Error("Should not be called");
+      });
+
+      const req = new NextRequest("http://localhost:3000/api/decisions", {
+        headers: { "x-org-id": "org_bank_test" },
+      });
+      const res = await handler(req);
+
+      expect(res.status).toBe(401);
+      const json = await res.json();
+      expect(json.ok).toBe(false);
+      expect(json.error.code).toBe("UNAUTHENTICATED");
+    });
   });
 });

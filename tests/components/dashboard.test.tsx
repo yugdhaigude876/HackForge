@@ -85,6 +85,8 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
         refresh: vi.fn(),
         run: vi.fn(),
         isRunning: false,
+        isFallback: false,
+        fallbackRequestId: null,
       });
 
       render(
@@ -125,6 +127,8 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
         refresh: vi.fn(),
         run: vi.fn(),
         isRunning: false,
+        isFallback: false,
+        fallbackRequestId: null,
       });
 
       render(
@@ -161,6 +165,8 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
         refresh: refreshSpy,
         run: vi.fn(),
         isRunning: false,
+        isFallback: false,
+        fallbackRequestId: null,
       });
 
       render(
@@ -198,6 +204,8 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
         refresh: vi.fn(),
         run: runSpy,
         isRunning: false,
+        isFallback: false,
+        fallbackRequestId: null,
       });
 
       render(
@@ -235,6 +243,8 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
         refresh: vi.fn(),
         run: vi.fn(),
         isRunning: false,
+        isFallback: false,
+        fallbackRequestId: null,
       });
 
       render(
@@ -328,6 +338,8 @@ describe("Dashboard Components & Status Cards (Phase 17)", () => {
         refresh: vi.fn(),
         run: vi.fn(),
         isRunning: false,
+        isFallback: false,
+        fallbackRequestId: null,
       });
 
       render(

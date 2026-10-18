@@ -7,6 +7,8 @@ import { Panel, DataTable, type Column, LoadingState, ErrorState, EmptyState } f
 import { Badge, Button } from "@/components/ui/primitives";
 import { formatCompactMinor } from "@/lib/money";
 import { ScrollText, RefreshCw, ShieldCheck } from "lucide-react";
+import { FallbackBanner } from "@/components/ui/fallback-banner";
+import { useDataSource } from "@/components/providers/data-source-provider";
 
 interface DecisionRecord {
   id: string;
@@ -17,6 +19,7 @@ interface DecisionRecord {
   confidence: number;
   explanation: string;
   allocations: Array<{ instrumentId: string; amount: string }>;
+  source?: string;
 }
 
 const SEEDED_AUDIT_DECISIONS: DecisionRecord[] = [
@@ -77,52 +80,99 @@ const SEEDED_AUDIT_DECISIONS: DecisionRecord[] = [
   },
 ];
 
+const OFFLINE_FALLBACK_AUDIT_DECISIONS: DecisionRecord[] = SEEDED_AUDIT_DECISIONS.map((d) => ({
+  ...d,
+  source: "offline-fallback",
+}));
+
 export default function AuditTrailPage() {
   const { user, isMock } = useAuth();
+  const { setSource } = useDataSource();
   const [decisions, setDecisions] = useState<DecisionRecord[]>(SEEDED_AUDIT_DECISIONS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isFallback, setIsFallback] = useState(false);
+  const [fallbackRequestId, setFallbackRequestId] = useState<string | null>(null);
 
   const isLive = Boolean(user && !isMock);
+
+  useEffect(() => {
+    if (isFallback) {
+      setSource("offline-fallback");
+    } else {
+      setSource(null);
+    }
+  }, [isFallback, setSource]);
+
+  const handleFetchResult = (res: { ok: boolean; status: number; data?: DecisionRecord[]; error?: { message?: string }; requestId?: string }) => {
+    if (res.ok && res.data) {
+      setDecisions(res.data);
+      setError(null);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      const msg = res.status === 401
+        ? "Authentication required. Please sign in with an authorised account to inspect live audit entries."
+        : (res.error?.message ? (res.error.message.includes("Permission denied") ? res.error.message : `Permission denied: ${res.error.message}`) : "Permission denied. Viewer or analyst access required.");
+      setError(msg);
+      setDecisions([]);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    if (res.status === 429) {
+      setError("Rate limit exceeded. Please wait before retrying.");
+      setDecisions([]);
+      setIsFallback(false);
+      setFallbackRequestId(null);
+      return;
+    }
+
+    // 5xx / Network / Timeout -> honest offline fallback
+    console.warn(`[AuditTrailPage] Server error (HTTP ${res.status}), activating offline fallback`);
+    setDecisions(OFFLINE_FALLBACK_AUDIT_DECISIONS);
+    setError(null);
+    setIsFallback(true);
+    setFallbackRequestId(res.requestId || null);
+  };
 
   const fetchAuditRecords = async () => {
     setLoading(true);
     setError(null);
     try {
       const res = await apiFetch<DecisionRecord[]>("/api/decisions?limit=50");
-      if (res.ok && res.data && res.data.length > 0) {
-        setDecisions(res.data);
-      } else {
-        console.warn("[AuditTrailPage] Non-200 or empty, activating engine fallback");
-        setDecisions(SEEDED_AUDIT_DECISIONS);
-      }
+      handleFetchResult(res);
     } catch (err) {
-      console.warn("[AuditTrailPage] Fetch exception, activating engine fallback:", err);
-      setDecisions(SEEDED_AUDIT_DECISIONS);
+      console.warn("[AuditTrailPage] Fetch exception, activating offline fallback:", err);
+      setDecisions(OFFLINE_FALLBACK_AUDIT_DECISIONS);
+      setError(null);
+      setIsFallback(true);
+      setFallbackRequestId(null);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!isLive) {
-      return;
-    }
+    if (!isLive) return;
 
     let cancelled = false;
     apiFetch<DecisionRecord[]>("/api/decisions?limit=50")
       .then((res) => {
         if (cancelled) return;
-        if (res.ok && res.data && res.data.length > 0) {
-          setDecisions(res.data);
-          setError(null);
-        } else {
-          setDecisions(SEEDED_AUDIT_DECISIONS);
-        }
+        handleFetchResult(res);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
-          setDecisions(SEEDED_AUDIT_DECISIONS);
+          console.warn("[AuditTrailPage] Network error on mount, activating offline fallback:", err);
+          setDecisions(OFFLINE_FALLBACK_AUDIT_DECISIONS);
+          setError(null);
+          setIsFallback(true);
+          setFallbackRequestId(null);
         }
       });
 
@@ -189,6 +239,11 @@ export default function AuditTrailPage() {
           <h1 className="text-lg font-semibold tracking-tight text-foreground">
             Audit Trail & Persisted Decisions
           </h1>
+          {isFallback && (
+            <Badge tone="warning" data-testid="fallback-badge">
+              Offline fallback
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {isMock && <Badge tone="info">Demo Auth — Inactive</Badge>}
@@ -203,6 +258,14 @@ export default function AuditTrailPage() {
           </Button>
         </div>
       </div>
+
+      {isFallback && (
+        <FallbackBanner
+          onRetry={fetchAuditRecords}
+          requestId={fallbackRequestId}
+          isRetrying={loading}
+        />
+      )}
 
       {isMock && (
         <div className="rounded-lg border border-border bg-surface p-4 text-sm">
