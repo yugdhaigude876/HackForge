@@ -193,7 +193,7 @@ export default function DigitalTwinPage() {
   const isLive = Boolean(user && !isMock);
   const { role: serverRole, loading: isRoleLoading } = useOrgRole();
   const userRole = isLive ? (serverRole ?? "viewer") : "viewer";
-  const canRun = isLive && !isRoleLoading && Boolean(serverRole) && (userRole === "analyst" || userRole === "admin");
+  const canRun = isLive && !isRoleLoading && Boolean(serverRole) && (userRole as string) !== "viewer";
 
   // Scenario Builder state
   const [outflowShockPct, setOutflowShockPct] = useState<number>(25);
@@ -752,6 +752,7 @@ export default function DigitalTwinPage() {
                 onClick={handleRunComparison}
                 disabled={isRunning || retryAfterSeconds !== null}
                 data-testid="run-comparison-btn"
+                className="bg-[#A3E635] text-[#0B0E14] font-bold hover:bg-[#86efac] shadow-[0_0_15px_rgba(163,230,53,0.4)]"
               >
                 {isRunning ? (
                   <>
@@ -762,11 +763,12 @@ export default function DigitalTwinPage() {
                   `Wait ${retryAfterSeconds}s`
                 ) : (
                   <>
-                    <Play className="h-4 w-4 mr-1.5" /> Run Comparison
+                    <Play className="h-4 w-4 mr-1.5 fill-current" /> Run Stress Comparison
                   </>
                 )}
               </Button>
             )}
+
           </div>
 
           {/* Error Banner */}

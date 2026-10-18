@@ -58,7 +58,7 @@ export interface SampleInstrument {
 }
 
 export const sampleInstruments: SampleInstrument[] = [
-  { id: "i1", name: "Overnight sweep", annualRateBps: 410, settlementLagHours: 0, penaltyBps: 0, deployed: 12_000_000_00, capacity: 20_000_000_00 },
-  { id: "i2", name: "7-day term deposit", annualRateBps: 465, settlementLagHours: 24, penaltyBps: 15, deployed: 10_500_000_00, capacity: 15_000_000_00 },
-  { id: "i3", name: "30-day T-bill MMF", annualRateBps: 502, settlementLagHours: 48, penaltyBps: 30, deployed: 6_000_000_00, capacity: 10_000_000_00 },
+  { id: "tier1_repo", name: "Tier 1: Overnight Repo", annualRateBps: 429, settlementLagHours: 0, penaltyBps: 50, deployed: 18_500_000_00, capacity: 25_000_000_00 },
+  { id: "tier2_bonds", name: "Tier 2: 2Y Sovereign Bonds", annualRateBps: 480, settlementLagHours: 0, penaltyBps: 200, deployed: 10_000_000_00, capacity: 15_000_000_00 },
+  { id: "tier3_equities", name: "Tier 3: Growth Equities", annualRateBps: 1000, settlementLagHours: 0, penaltyBps: 1500, deployed: 5_000_000_00, capacity: 10_000_000_00 },
 ];
