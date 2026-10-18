@@ -46,14 +46,48 @@ const NOTIFICATION_STYLES: Record<LiveNotification["type"], string> = {
   STATUS: "border-accent-gold/40 bg-accent-gold/10 text-accent-gold",
 };
 
-const CONNECTION_STYLES: Record<LiveConnection, { label: string; className: string; dot: string }> = {
-  live: { label: "LIVE", className: "border-accent-teal/35 bg-accent-teal/15 text-accent-teal", dot: "bg-accent-teal animate-pulse" },
-  paused: { label: "PAUSED", className: "border-border bg-surface-2 text-muted", dot: "bg-muted" },
-  completed: { label: "COMPLETED", className: "border-accent-blue/35 bg-accent-blue/15 text-accent-blue", dot: "bg-accent-blue" },
-  connecting: { label: "CONNECTING", className: "border-border bg-surface-2 text-muted", dot: "bg-muted animate-pulse" },
-  offline: { label: "OFFLINE", className: "border-accent-gold/40 bg-accent-gold/15 text-accent-gold", dot: "bg-accent-gold" },
-  "permission-denied": { label: "NO ACCESS", className: "border-accent-crimson/40 bg-accent-crimson/15 text-accent-crimson", dot: "bg-accent-crimson" },
-  empty: { label: "NO STREAM", className: "border-border bg-surface-2 text-muted", dot: "bg-muted" },
+const CONNECTION_STYLES: Record<
+  LiveConnection,
+  { label: string; className: string; dot: string; ping?: boolean }
+> = {
+  live: {
+    label: "LIVE",
+    className: "border-accent-teal/35 bg-accent-teal/15 text-accent-teal",
+    dot: "bg-accent-teal",
+    ping: true,
+  },
+  paused: {
+    label: "PAUSED",
+    className: "border-border bg-surface-2 text-muted",
+    dot: "bg-muted",
+  },
+  completed: {
+    label: "COMPLETED",
+    className: "border-accent-blue/35 bg-accent-blue/15 text-accent-blue",
+    dot: "bg-accent-blue",
+  },
+  connecting: {
+    label: "CONNECTING",
+    className: "border-border bg-surface-2 text-muted",
+    dot: "bg-muted",
+    ping: true,
+  },
+  offline: {
+    label: "OFFLINE",
+    className: "border-accent-gold/40 bg-accent-gold/15 text-accent-gold",
+    dot: "bg-accent-gold",
+  },
+  "permission-denied": {
+    label: "NO ACCESS",
+    className: "border-accent-crimson/40 bg-accent-crimson/15 text-accent-crimson",
+    dot: "bg-accent-crimson",
+    ping: true,
+  },
+  empty: {
+    label: "NO STREAM",
+    className: "border-border bg-surface-2 text-muted",
+    dot: "bg-muted",
+  },
 };
 
 const CONNECTION_TITLES: Record<LiveConnection, string> = {
@@ -75,7 +109,12 @@ function ConnectionPill({ connection }: { connection: LiveConnection }) {
       className={`hidden md:flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2 py-1 text-[10px] font-mono font-bold ${s.className}`}
       title={CONNECTION_TITLES[connection]}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+      <span className="relative flex h-2 w-2">
+        {s.ping && (
+          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${s.dot}`} />
+        )}
+        <span className={`relative inline-flex rounded-full h-2 w-2 ${s.dot}`} />
+      </span>
       <span>{s.label}</span>
     </div>
   );
@@ -190,11 +229,11 @@ export function TopBar({
         {/* Center: simulation clock, replay controls, repo window */}
         <div className="flex shrink-0 items-center gap-2">
           <div
-            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 font-mono text-xs text-foreground"
+            className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 font-mono text-xs text-foreground tracking-tight shadow-sm"
             title="Dataset clock (UTC)"
           >
             <Clock className="h-3.5 w-3.5 shrink-0 text-accent-blue" />
-            <span className="font-semibold tabular-nums">{compactClock(clockTimestamp)}</span>
+            <span className="font-semibold font-mono tabular-nums">{compactClock(clockTimestamp)}</span>
           </div>
 
           {onPlayToggle && (
@@ -203,7 +242,7 @@ export function TopBar({
                 type="button"
                 onClick={onPlayToggle}
                 className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-semibold transition-all duration-150 ${
-                  isPlaying ? "bg-accent-crimson text-white" : "bg-accent-blue text-white hover:bg-accent-blue/90"
+                  isPlaying ? "bg-accent-crimson text-white shadow-sm" : "bg-accent-blue text-white hover:bg-accent-blue/90 shadow-sm"
                 }`}
               >
                 {isPlaying ? (
@@ -231,19 +270,24 @@ export function TopBar({
               )}
 
               {onSpeedChange && (
-                <div className="flex items-center border-l border-border/80 pl-1 ml-0.5">
-                  {[1, 10, 60].map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => onSpeedChange(s)}
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-bold transition-all ${
-                        playbackSpeed === s ? "bg-accent-blue/20 text-accent-blue" : "text-muted hover:text-foreground"
-                      }`}
-                    >
-                      {s}x
-                    </button>
-                  ))}
+                <div className="flex items-center rounded-lg border border-border/70 bg-surface/80 p-0.5 ml-1 shadow-inner">
+                  {[1, 10, 60].map((s) => {
+                    const isActive = playbackSpeed === s;
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => onSpeedChange(s)}
+                        className={`relative rounded-md px-2 py-0.5 text-[10px] font-mono font-bold transition-all duration-200 ${
+                          isActive
+                            ? "bg-accent-blue text-white shadow-sm ring-1 ring-white/20"
+                            : "text-muted hover:text-foreground hover:bg-white/[0.04]"
+                        }`}
+                      >
+                        {s}x
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -259,7 +303,10 @@ export function TopBar({
             </div>
           ) : isRepoMaturing ? (
             <div className="hidden 2xl:flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-accent-teal/35 bg-accent-teal/15 px-2.5 py-1.5 text-[11px] font-bold text-accent-teal">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent-teal animate-breathing-beacon" />
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-teal opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-accent-teal" />
+              </span>
               <span>REPO MATURED: +${repoMaturedYieldUsd?.toLocaleString() ?? "0"} EARNED</span>
             </div>
           ) : (
@@ -284,7 +331,7 @@ export function TopBar({
             </div>
           )}
 
-          {/* Master solvency badge */}
+          {/* Master solvency badge with radar pulse indicator */}
           <div
             data-testid="decision-status-value"
             className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 py-1 text-xs font-bold ${statusTone}`}
@@ -294,6 +341,26 @@ export function TopBar({
                 : undefined
             }
           >
+            <span className="relative flex h-2 w-2 mr-0.5">
+              <span
+                className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                  solvencyStatus === "HEALTHY"
+                    ? "bg-accent-teal"
+                    : solvencyStatus === "LOW_CONFIDENCE"
+                    ? "bg-accent-gold"
+                    : "bg-accent-crimson"
+                }`}
+              />
+              <span
+                className={`relative inline-flex rounded-full h-2 w-2 ${
+                  solvencyStatus === "HEALTHY"
+                    ? "bg-accent-teal"
+                    : solvencyStatus === "LOW_CONFIDENCE"
+                    ? "bg-accent-gold"
+                    : "bg-accent-crimson"
+                }`}
+              />
+            </span>
             {solvencyStatus === "HEALTHY" ? (
               <ShieldCheck className="h-4 w-4" />
             ) : solvencyStatus === "LOW_CONFIDENCE" ? (
@@ -304,16 +371,16 @@ export function TopBar({
             <span>
               {solvencyStatus === "HEALTHY" ? "HEALTHY" : solvencyStatus === "LOW_CONFIDENCE" ? "LOW CONFIDENCE" : "UNDER-RESERVED"}
             </span>
-            <span data-testid="mase-chip" className="hidden xl:inline font-mono text-[10px] font-normal opacity-80">
+            <span data-testid="mase-chip" className="hidden xl:inline font-mono text-[10px] font-normal opacity-80 tabular-nums">
               · MASE: {mase !== null && mase !== undefined ? mase.toFixed(2) : "n/a"}
             </span>
-            <span data-testid="confidence-chip" className="hidden xl:inline font-mono text-[10px] font-normal opacity-80">
+            <span data-testid="confidence-chip" className="hidden xl:inline font-mono text-[10px] font-normal opacity-80 tabular-nums">
               {solvencyStatus === "LOW_CONFIDENCE"
                 ? "· Buffer Expanded 1.5x"
                 : `· VaR: ${Math.round(confidence * 100)}% Conf.`}
             </span>
             {solvencyStatus === "UNDER_RESERVED" && deficitAmountUsd > 0 && (
-              <span className="hidden xl:inline font-mono text-[10px] font-normal">
+              <span className="hidden xl:inline font-mono text-[10px] font-normal tabular-nums">
                 · Deficit: ${deficitAmountUsd.toLocaleString()}
               </span>
             )}

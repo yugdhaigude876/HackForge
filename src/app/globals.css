@@ -149,10 +149,10 @@
   --shadow-glass: 0 8px 24px -4px rgba(29, 38, 56, 0.08), 0 0 1px 1px rgba(222, 217, 205, 0.8);
   --shadow-glow: 0 0 25px -5px rgba(37, 99, 235, 0.2);
 
-  /* Sidebar persistent navy in light mode matching Ref 2 */
-  --sidebar-bg: #070B14;
-  --sidebar-surface: rgba(15, 23, 42, 0.85);
-  --sidebar-border: rgba(255, 255, 255, 0.08);
+  /* Refined slate tone for sidebar in light mode for harmonious contrast */
+  --sidebar-bg: #0F172A;
+  --sidebar-surface: rgba(30, 41, 59, 0.85);
+  --sidebar-border: rgba(255, 255, 255, 0.12);
   --sidebar-foreground: #F8FAFC;
   --sidebar-muted: #94A3B8;
 

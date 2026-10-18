@@ -46,13 +46,13 @@ export function KpiGrid({
         </div>
 
         <div className="mt-3">
-          <div className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-foreground tabular">
+          <div className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-foreground tabular tabular-nums">
             <AnimatedCounter
               value={cashDollars}
               formatter={(v) => `$${(v / 1_000_000).toFixed(1)}M`}
             />
           </div>
-          <p className="mt-1 text-[11px] text-muted font-medium">
+          <p className="mt-1 text-[11px] text-muted font-medium font-mono tabular-nums">
             {formatMinor(availableCashMinor)} · Tier 0 Cash
           </p>
         </div>
@@ -77,7 +77,7 @@ export function KpiGrid({
         </div>
 
         <div className="mt-3">
-          <div className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-accent-gold tabular">
+          <div className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-accent-gold tabular tabular-nums">
             <AnimatedCounter
               value={reserveDollars}
               formatter={(v) => `$${(v / 1_000_000).toFixed(1)}M`}
@@ -90,7 +90,7 @@ export function KpiGrid({
 
         <div className="mt-4 flex items-center justify-between pt-2.5 border-t border-border/80 text-[10px] font-mono">
           <span className="text-muted">LCR Coverage:</span>
-          <span className="text-accent-teal font-bold">134% · Basel III Compliant</span>
+          <span className="text-accent-teal font-bold tabular-nums">134% · Basel III Compliant</span>
         </div>
       </div>
 
@@ -112,7 +112,7 @@ export function KpiGrid({
         </div>
 
         <div className="relative z-10 mt-3">
-          <div className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-accent-blue tabular">
+          <div className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-accent-blue tabular tabular-nums">
             <AnimatedCounter
               value={surplusDollars}
               formatter={(v) => `$${(v / 1_000_000).toFixed(1)}M`}
@@ -125,7 +125,7 @@ export function KpiGrid({
 
         <div className="relative z-10 mt-4 flex items-center justify-between pt-2.5 border-t border-border/80 text-[10px] font-mono">
           <span className="text-muted">Idle Cash Drag:</span>
-          <span className="text-accent-teal font-bold">$0.00 (Zero Drag)</span>
+          <span className="text-accent-teal font-bold tabular-nums">$0.00 (Zero Drag)</span>
         </div>
       </div>
 
@@ -140,13 +140,13 @@ export function KpiGrid({
 
         <div className="mt-3">
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-accent-teal tabular">
+            <span className="text-2xl lg:text-3xl font-extrabold font-mono tracking-tight text-accent-teal tabular tabular-nums">
               <AnimatedCounter
                 value={annualizedApyPct}
                 formatter={(v) => `+${v.toFixed(2)}%`}
               />
             </span>
-            <span className="font-mono text-xs text-accent-teal/80 font-bold tabular">
+            <span className="font-mono text-xs text-accent-teal/80 font-bold tabular tabular-nums">
               (+{formatCompactMinor(netYieldMinor)})
             </span>
           </div>

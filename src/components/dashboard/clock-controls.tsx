@@ -31,13 +31,30 @@ export function ClockControls() {
       aria-label="Dataset clock controls"
       className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs"
     >
-      <div className="flex items-center gap-1.5 font-mono">
+      <div className="flex items-center gap-2 font-mono">
+        <span className="relative flex h-2 w-2">
+          {running && (
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent-teal opacity-75" />
+          )}
+          <span
+            className={`relative inline-flex rounded-full h-2 w-2 ${
+              running ? "bg-accent-teal" : completed ? "bg-accent-blue" : "bg-muted"
+            }`}
+          />
+        </span>
         <Radio className={`h-3.5 w-3.5 ${running ? "text-accent-teal" : "text-muted"}`} aria-hidden />
         <span className="font-semibold text-foreground">Dataset clock</span>
-        <span data-testid="clock-position" className="text-muted tabular-nums">
+        <span data-testid="clock-position" className="text-muted font-mono tabular-nums">
           hour {applied.toLocaleString("en-US")} / {total.toLocaleString("en-US")}
         </span>
-        <span data-testid="clock-status" className="rounded border border-border px-1.5 py-0.5 text-[10px] font-bold uppercase text-muted">
+        <span
+          data-testid="clock-status"
+          className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase font-mono tabular-nums ${
+            running
+              ? "border-accent-teal/40 bg-accent-teal/15 text-accent-teal"
+              : "border-border text-muted"
+          }`}
+        >
           {completed ? "completed" : running ? "running" : "paused"}
         </span>
       </div>

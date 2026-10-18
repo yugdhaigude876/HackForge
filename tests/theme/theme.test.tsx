@@ -36,8 +36,8 @@ describe("Theme System (ThemeProvider & ThemeToggle)", () => {
     document.documentElement.classList.remove("dark");
   });
 
-  it("defaults to system preference dark when media query matches dark", () => {
-    window.matchMedia = MockMatchMedia(false); // prefers-color-scheme: light is false -> dark
+  it("defaults to institutional dark mode by default upon first visit", () => {
+    window.matchMedia = MockMatchMedia(true); // even if OS prefers light
 
     render(
       <ThemeProvider>
@@ -50,8 +50,9 @@ describe("Theme System (ThemeProvider & ThemeToggle)", () => {
     expect(document.documentElement.classList.contains("dark")).toBe(true);
   });
 
-  it("defaults to system preference light when media query matches light", () => {
-    window.matchMedia = MockMatchMedia(true); // prefers-color-scheme: light is true
+  it("respects user preference when light is saved in localStorage", () => {
+    window.localStorage.setItem("reserve-juggler.theme", "light");
+    window.matchMedia = MockMatchMedia(false);
 
     render(
       <ThemeProvider>

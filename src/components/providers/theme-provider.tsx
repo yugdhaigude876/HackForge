@@ -28,14 +28,7 @@ function getInitialTheme(): ThemeMode {
     // LocalStorage may throw in restricted browsing contexts
   }
 
-  try {
-    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
-      return "light";
-    }
-  } catch {
-    // Ignore matchMedia errors
-  }
-
+  // Institutional terminal standard: Dark Mode by default on first visit
   return "dark";
 }
 
@@ -64,23 +57,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, [theme]);
 
-  // Listen to system theme changes if user has not explicitly stored a preference
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) return; // User made an explicit choice
 
-      const mediaQuery = window.matchMedia("(prefers-color-scheme: light)");
-      const handler = (e: MediaQueryListEvent) => {
-        setThemeState(e.matches ? "light" : "dark");
-      };
-
-      mediaQuery.addEventListener("change", handler);
-      return () => mediaQuery.removeEventListener("change", handler);
-    } catch {
-      // Ignore matchMedia listener failure
-    }
-  }, []);
 
   const setTheme = (newTheme: ThemeMode) => {
     setThemeState(newTheme);
