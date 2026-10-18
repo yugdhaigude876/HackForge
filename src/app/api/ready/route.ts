@@ -12,6 +12,7 @@ export async function GET(): Promise<NextResponse> {
     // Best effort: a failure here never turns a ready service into a degraded one.
     let config:
       | {
+          tokenVerifier: "ok" | "failed";
           adminProjectId: string | null;
           clientProjectId: string | null;
           projectsMatch: boolean;
@@ -46,7 +47,19 @@ export async function GET(): Promise<NextResponse> {
             ? authErr.message.replace(/\/[\w./@-]+/g, "<path>").replace(/[A-Za-z0-9_-]{30,}/g, "<redacted>").slice(0, 140)
             : undefined;
       }
+      // Token verification uses Google's public keys (jose). Confirm they are reachable from here.
+      let tokenVerifier: "ok" | "failed" = "ok";
+      try {
+        const { FIREBASE_JWKS_URL } = await import("@/server/jose-verifier");
+        const res = await fetch(FIREBASE_JWKS_URL, { signal: AbortSignal.timeout(4000), cache: "no-store" });
+        const body = (await res.json()) as { keys?: unknown[] };
+        if (!res.ok || !Array.isArray(body.keys) || body.keys.length === 0) tokenVerifier = "failed";
+      } catch {
+        tokenVerifier = "failed";
+      }
+
       config = {
+        tokenVerifier,
         adminProjectId,
         clientProjectId,
         projectsMatch: adminProjectId !== null && adminProjectId === clientProjectId,

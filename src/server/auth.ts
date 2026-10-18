@@ -2,6 +2,7 @@ import "server-only";
 
 import { NextRequest } from "next/server";
 import { getAdminAuth } from "./firebase-admin";
+import { JoseTokenVerifier } from "./jose-verifier";
 
 export type OrgRole = "viewer" | "analyst" | "admin";
 
@@ -66,8 +67,14 @@ export class UnauthenticatedError extends AuthError {
 export function classifyAuthFailure(err: unknown): AuthFailureReason {
   const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : "";
   const message = err instanceof Error ? err.message : String(err ?? "");
-  if (code === "auth/id-token-expired") return "token-expired";
+  if (code === "auth/id-token-expired" || code === "ERR_JWT_EXPIRED") return "token-expired";
   if (code === "auth/id-token-revoked") return "token-revoked";
+  // jose: claim validation failures name the claim that did not match
+  if (code === "ERR_JWT_CLAIM_VALIDATION_FAILED") {
+    const claim = typeof err === "object" && err !== null && "claim" in err ? String((err as { claim: unknown }).claim) : "";
+    if (claim === "iss" || claim === "aud") return "wrong-project";
+    if (claim === "exp") return "token-expired";
+  }
   if (/incorrect "aud"|incorrect "iss"|audience|issuer/i.test(message)) return "wrong-project";
   if (
     err instanceof Error &&
@@ -140,7 +147,16 @@ export class FirestoreMembershipStore implements MembershipStore {
   }
 }
 
-let activeTokenVerifier: TokenVerifier = new AdminTokenVerifier();
+/**
+ * Default verifier. Real deployments verify ID tokens with `jose` against Google's public keys
+ * (no dependency on firebase-admin/auth, which fails to load on some serverless Node runtimes).
+ * The Firebase Auth emulator issues unsigned tokens, so it keeps using the Admin SDK.
+ */
+function createDefaultVerifier(): TokenVerifier {
+  return process.env.FIREBASE_AUTH_EMULATOR_HOST ? new AdminTokenVerifier() : new JoseTokenVerifier();
+}
+
+let activeTokenVerifier: TokenVerifier = createDefaultVerifier();
 let activeMembershipStore: MembershipStore = new FirestoreMembershipStore();
 
 /**
@@ -161,7 +177,7 @@ export function setMembershipStore(store: MembershipStore): void {
  * Resets verifier and membership store to defaults.
  */
 export function resetAuthOverrides(): void {
-  activeTokenVerifier = new AdminTokenVerifier();
+  activeTokenVerifier = createDefaultVerifier();
   activeMembershipStore = new FirestoreMembershipStore();
 }
 
