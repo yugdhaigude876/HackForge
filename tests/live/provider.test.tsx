@@ -2,6 +2,10 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, act } from "@testing-library/react";
+vi.mock("@/lib/firebase/auth-context", () => ({
+  useAuth: () => ({ user: { uid: "u1" }, isMock: false }),
+}));
+
 import { LiveTreasuryProvider, useLiveTreasury } from "@/components/providers/live-treasury-provider";
 import type { LiveClock, LiveSource } from "@/lib/live/types";
 import type { StreamTick } from "@/engine/live-tick";
@@ -10,7 +14,7 @@ function makeSource() {
   const h: {
     clock?: Parameters<LiveSource["subscribeClock"]>[1];
     clockErr?: Parameters<LiveSource["subscribeClock"]>[2];
-    stream?: Parameters<LiveSource["subscribeStream"]>[3];
+    stream?: Parameters<LiveSource["subscribeStream"]>[2];
     unsubs: number;
   } = { unsubs: 0 };
   const source: LiveSource = {

@@ -188,7 +188,7 @@ export default function ForecastPage() {
     } else {
       setSource(null);
     }
-  }, [isFallback, isLive, data?.source, setSource]);
+  }, [isFallback, streamingForecast, isLive, data?.source, setSource]);
 
   // Countdown timer for 429
   useEffect(() => {

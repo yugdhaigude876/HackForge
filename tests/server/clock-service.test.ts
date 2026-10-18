@@ -9,7 +9,6 @@ vi.mock("@/server/dataset", async (importOriginal) => {
 });
 
 import {
-  ClockError,
   MemoryClockStore,
   advanceClock,
   controlClock,

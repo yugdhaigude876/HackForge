@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withAuth } from "@/server/with-auth";
-import {
-  loadTreasuryDataset,
-  getTreasuryDatasetSummary,
-} from "@/engine/dataset";
+import { getTreasuryDatasetSummary } from "@/engine/dataset";
+import { getAllDatasetRecords } from "@/server/dataset";
 import type { OrgAuthContext } from "@/server/auth";
 
 export const maxDuration = 30;
@@ -33,7 +31,7 @@ export const GET = withAuth(
         Math.max(1, Number.parseInt(limitParam ?? "168", 10) || 168)
       );
 
-      const records = loadTreasuryDataset();
+      const records = getAllDatasetRecords();
       const summary = getTreasuryDatasetSummary(records);
 
       if (summaryOnly) {

@@ -69,3 +69,21 @@ export function getDatasetRow(index: number): TreasuryHourRecord | null {
     emergency_overdraft_penalty_apr_pct: r[IDX.emergency_overdraft_penalty_apr_pct] as number,
   };
 }
+
+let cachedRecords: TreasuryHourRecord[] | null = null;
+
+/**
+ * All 8,760 dataset records from the bundled asset (memoised). Server routes must use this
+ * instead of `loadTreasuryDataset()`, which reads the CSV from disk and silently falls back to a
+ * 168-hour sample when the file is not in the serverless bundle (the case on Vercel).
+ */
+export function getAllDatasetRecords(): TreasuryHourRecord[] {
+  if (cachedRecords) return cachedRecords;
+  const out: TreasuryHourRecord[] = [];
+  for (let i = 0; i < ROWS.length; i++) {
+    const rec = getDatasetRow(i);
+    if (rec) out.push(rec);
+  }
+  cachedRecords = out;
+  return out;
+}

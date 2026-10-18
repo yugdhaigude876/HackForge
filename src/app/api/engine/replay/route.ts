@@ -11,6 +11,7 @@ import {
   TimelineSimulationResult,
 } from "@/engine/simulator";
 import type { OrgAuthContext } from "@/server/auth";
+import { getAllDatasetRecords } from "@/server/dataset";
 
 export const maxDuration = 60;
 
@@ -35,6 +36,8 @@ function executeSimulation(input: z.infer<typeof ReplayRequestSchema>) {
   const operationalFloor = Money.fromDecimal(input.operationalFloorUsd, "USD");
 
   const simOptions: TimelineSimulatorOptions = {
+    // Bundled asset: the CSV is not available on the serverless filesystem (Vercel).
+    dataset: getAllDatasetRecords(),
     startHour: input.startHour,
     maxHours: input.maxHours,
     initialCash,
