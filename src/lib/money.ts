@@ -38,3 +38,15 @@ export function formatCompactMinor(minor: Minor | bigint | string | Money): stri
   if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(0)}K`;
   return `${sign}$${abs.toFixed(0)}`;
 }
+
+/**
+ * Format dollar amount as USD string. Display only.
+ */
+export function formatCurrency(dollars: number): string {
+  return usdWhole.format(dollars);
+}
+
+/**
+ * Alias for formatMinor for UI compatibility.
+ */
+export const formatCurrencyMinor = formatMinor;

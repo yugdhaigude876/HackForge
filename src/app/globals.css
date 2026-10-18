@@ -1,59 +1,64 @@
 @import "tailwindcss";
 
-/* Reserve Juggler design tokens — Dual Theme (Dark Navy & Warm Soft Off-White) */
+/* Reserve Juggler design tokens — Design 3: Institutional Dark Terminal */
 
 :root,
 [data-theme="dark"] {
-  --background: #070d1a;
-  --surface: #0c1526;
-  --surface-2: #111d33;
-  --border: #1e2f4e;
-  --foreground: #e6ecf7;
-  --muted: #8a9bb8;
-  --primary: #3b82f6;
-  --primary-soft: #1d3a6e;
-  --positive: #34d399;
-  --warning: #fbbf24;
-  --negative: #f87171;
-  --policy-juggler: #38bdf8;
-  --policy-cash: #fbbf24;
-  --policy-buffer: #c084fc;
+  --background: #0B0E14;
+  --surface: #121620;
+  --surface-2: #1A202C;
+  --border: #1E2536;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --foreground: #F8FAFC;
+  --muted: #94A3B8;
+
+  /* Telemetry & State Accents */
+  --primary: #38BDF8;
+  --primary-soft: rgba(56, 189, 248, 0.15);
+  --lime: #A3E635;
+  --lime-soft: rgba(163, 230, 53, 0.15);
+  --positive: #22C55E;
+  --warning: #F59E0B;
+  --negative: #EF4444;
+  --negative-soft: rgba(239, 68, 68, 0.15);
+  --repo-indigo: #818CF8;
+  --repo-indigo-soft: rgba(129, 140, 248, 0.15);
+  --tier2-cyan: #06B6D4;
+  --tier3-gold: #F59E0B;
+
+  --policy-juggler: #A3E635;
+  --policy-cash: #94A3B8;
+  --policy-buffer: #38BDF8;
+
   color-scheme: dark;
 }
 
 [data-theme="light"] {
-  --background: #f3f1ec;
-  --surface: #faf9f6;
-  --surface-2: #efece5;
-  --border: #ded9cd;
-  --foreground: #1d2638;
-  --muted: #667085;
-  --primary: #2f5fc4;
-  --primary-soft: #dfe7f7;
-  --positive: #1d8a5e;
-  --warning: #a96f12;
-  --negative: #b83f36;
-  --policy-juggler: #0284c7;
-  --policy-cash: #d97706;
-  --policy-buffer: #9333ea;
-  color-scheme: light;
-}
+  --background: #0B0E14;
+  --surface: #121620;
+  --surface-2: #1A202C;
+  --border: #1E2536;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --foreground: #F8FAFC;
+  --muted: #94A3B8;
+  --primary: #38BDF8;
+  --primary-soft: rgba(56, 189, 248, 0.15);
+  --lime: #A3E635;
+  --lime-soft: rgba(163, 230, 53, 0.15);
+  --positive: #22C55E;
+  --warning: #F59E0B;
+  --negative: #EF4444;
+  --negative-soft: rgba(239, 68, 68, 0.15);
+  --repo-indigo: #818CF8;
+  --repo-indigo-soft: rgba(129, 140, 248, 0.15);
+  --tier2-cyan: #06B6D4;
+  --tier3-gold: #F59E0B;
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --background: #f3f1ec;
-    --surface: #faf9f6;
-    --surface-2: #efece5;
-    --border: #ded9cd;
-    --foreground: #1d2638;
-    --muted: #667085;
-    --primary: #2f5fc4;
-    --primary-soft: #dfe7f7;
-    --positive: #1d8a5e;
-    --warning: #a96f12;
-    --negative: #b83f36;
-    color-scheme: light;
-  }
+  --policy-juggler: #A3E635;
+  --policy-cash: #94A3B8;
+  --policy-buffer: #38BDF8;
+
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -68,6 +73,9 @@
   --color-positive: var(--positive);
   --color-warning: var(--warning);
   --color-negative: var(--negative);
+  --color-lime: var(--lime);
+  --color-lime-soft: var(--lime-soft);
+  --color-repo: var(--repo-indigo);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -75,8 +83,10 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .tabular {
@@ -84,26 +94,50 @@ body {
   font-family: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-.panel-elevation {
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.25);
+/* Institutional Terminal Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-[data-theme="light"] .panel-elevation {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+::-webkit-scrollbar-track {
+  background: #0B0E14;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .fade-in {
-    animation: fade-in 220ms ease-out both;
-  }
-  @keyframes fade-in {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
+::-webkit-scrollbar-thumb {
+  background: #1E2536;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2D3748;
+}
+
+/* Glassmorphism & Elevation */
+.terminal-card {
+  background: #121620;
+  border: 1px solid #1E2536;
+  border-radius: 0.75rem;
+}
+
+.terminal-card-elevated {
+  background: linear-gradient(180deg, rgba(18, 22, 32, 0.95) 0%, rgba(14, 17, 25, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);
+}
+
+.terminal-pill-active {
+  background: #A3E635;
+  color: #0B0E14;
+  font-weight: 600;
+}
+
+/* Micro Neon Animations */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.98); }
+}
+
+.neon-pulse {
+  animation: pulse-subtle 2s infinite ease-in-out;
 }
