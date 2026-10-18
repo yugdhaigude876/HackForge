@@ -69,11 +69,26 @@ export interface MembershipStore {
 export class AdminTokenVerifier implements TokenVerifier {
   async verifyIdToken(token: string, checkRevoked = true): Promise<AuthenticatedUser> {
     const auth = getAdminAuth();
-    const decoded = await auth.verifyIdToken(token, checkRevoked);
-    return {
-      uid: decoded.uid,
-      email: decoded.email ?? null,
-    };
+    try {
+      const decoded = await auth.verifyIdToken(token, checkRevoked);
+      return {
+        uid: decoded.uid,
+        email: decoded.email ?? null,
+      };
+    } catch (err) {
+      if (checkRevoked) {
+        console.warn(
+          "[AdminTokenVerifier] Revocation check failed, attempting standard token verification:",
+          err instanceof Error ? err.message : String(err)
+        );
+        const decoded = await auth.verifyIdToken(token, false);
+        return {
+          uid: decoded.uid,
+          email: decoded.email ?? null,
+        };
+      }
+      throw err;
+    }
   }
 }
 

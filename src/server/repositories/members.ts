@@ -30,11 +30,11 @@ export const membersRepo = {
 
     const data = validateDoc(MemberDocSchema, snap.data(), snap.id);
     return {
-      orgId: validOrgId,
-      uid: validUid,
+      orgId: data.orgId || validOrgId,
+      uid: data.uid || validUid,
       role: data.role as OrgRole,
-      createdAt: toDate(data.createdAt),
-      createdBy: data.createdBy,
+      createdAt: data.createdAt ? toDate(data.createdAt) : new Date(),
+      createdBy: data.createdBy || "system",
     };
   },
 
@@ -91,11 +91,11 @@ export const membersRepo = {
     return snap.docs.map((d) => {
       const data = validateDoc(MemberDocSchema, d.data(), d.id);
       return {
-        orgId: validOrgId,
-        uid: d.id,
+        orgId: data.orgId || validOrgId,
+        uid: data.uid || d.id,
         role: data.role as OrgRole,
-        createdAt: toDate(data.createdAt),
-        createdBy: data.createdBy,
+        createdAt: data.createdAt ? toDate(data.createdAt) : new Date(),
+        createdBy: data.createdBy || "system",
       };
     });
   },

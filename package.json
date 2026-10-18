@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "build:dataset": "node scripts/build-dataset.mjs",
+    "prebuild": "node scripts/build-dataset.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

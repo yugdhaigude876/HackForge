@@ -15,27 +15,22 @@
  * 7. Records detailed audit events and timeline snapshots for interactive UI scrubbers.
  */
 
-import { Money } from "@/engine/money";
-import {
-  TreasuryHourRecord,
-  loadTreasuryDataset,
-  treasuryRecordToHourlyBucket,
-} from "@/engine/dataset";
-import { HourlyBucket } from "@/engine/models";
-import {
-  TreasuryPortfolio,
-  TreasurySnapshot,
-  TierLiquidationOrder,
-} from "@/engine/treasury-vaults";
-import {
-  HourOfWeekSmoothingForecaster,
-} from "@/engine/forecast";
-import {
-  computeRequiredReserve,
-  calculateQuantile,
-} from "@/engine/reserve";
 
-export type TimelinePolicy = "reserve-juggler" | "hold-all-cash" | "fixed-buffer";
+import { Money } from "@/engine/money";
+import { TreasuryHourRecord, loadTreasuryDataset } from "@/engine/dataset";
+import { TierLiquidationOrder } from "@/engine/treasury-vaults";
+import {
+  DEFAULT_ALLOCATION_WEIGHTS,
+  applyStressShocks,
+  createTreasuryState,
+  stepTreasury,
+  type TimelineAuditLog,
+  type TimelineFrame,
+  type TimelinePolicy,
+} from "@/engine/treasury-step";
+
+export type { TimelineFrame, TimelinePolicy } from "@/engine/treasury-step";
+export type { TierLiquidationOrder };
 
 export interface TimelineSimulatorOptions {
   /** Optional custom dataset; defaults to the 8,760-hour benchmark dataset */
@@ -82,20 +77,6 @@ export interface TimelineSimulatorOptions {
   policy?: TimelinePolicy;
 }
 
-export interface TimelineFrame {
-  hourIndex: number;
-  timestamp: string;
-  depositsUsd: number;
-  withdrawalsUsd: number;
-  netFlowUsd: number;
-  portfolio: TreasurySnapshot;
-  requiredReserveMinor: string;
-  deployableSurplusMinor: string;
-  liquidityStatus: "HEALTHY" | "UNDER_RESERVED" | "LOW_CONFIDENCE";
-  events: string[];
-  liquidations: TierLiquidationOrder[];
-}
-
 export interface TimelineSimulationSummary {
   policy: TimelinePolicy;
   totalHoursSimulated: number;
@@ -115,14 +96,17 @@ export interface TimelineSimulationSummary {
   maxTier3DrawdownPct: number;
 }
 
+
 export interface TimelineSimulationResult {
   summary: TimelineSimulationSummary;
   frames: TimelineFrame[];
-  auditLogs: { hour: number; timestamp: string; message: string; type: "SWEEP" | "MATURITY" | "LIQUIDATION" | "OVERDRAFT" | "INFO" }[];
+  auditLogs: TimelineAuditLog[];
 }
 
 /**
  * Runs a continuous timeline simulation across the benchmark treasury dataset.
+ * Each hour is processed by the shared pure stepTreasury function, which the realtime
+ * clock service also uses, so batch and streamed runs are identical.
  */
 export function runTimelineSimulation(
   options: TimelineSimulatorOptions = {}
@@ -141,220 +125,29 @@ export function runTimelineSimulation(
   const alpha = options.alpha ?? 0.01;
   const policy: TimelinePolicy = options.policy ?? "reserve-juggler";
 
-  const outflowShockMultiplier = 1.0 + Math.max(0, options.outflowShockPct ?? 0) / 100.0;
-  const weights = options.targetWeights ?? {
-    repoPct: 50,
-    bondsPct: 35,
-    equitiesPct: 15,
-  };
+  const weights = options.targetWeights ?? DEFAULT_ALLOCATION_WEIGHTS;
 
-  const portfolio = new TreasuryPortfolio(initialCash);
-  const forecaster = new HourOfWeekSmoothingForecaster({ mode: "ewma", lambda: 0.3 });
-
-  // Rolling history for forecaster and empirical residuals
-  const historyBuckets: HourlyBucket[] = [];
-  const residualHistory: number[] = [];
+  const state = createTreasuryState(initialCash);
+  const ctx = { policy, operationalFloor, horizonHours, alpha, weights };
 
   const frames: TimelineFrame[] = [];
-  const auditLogs: TimelineSimulationResult["auditLogs"] = [];
+  const auditLogs: TimelineAuditLog[] = [];
 
-  let shortfallEventsCount = 0;
-  let overdraftHoursCount = 0;
-  let maxOverdraftDrawn = Money.zero("USD");
-
-  const initialAssets = portfolio.getTotalNetAssets();
+  const initialAssets = state.portfolio.getTotalNetAssets();
 
   for (let step = 0; step < maxHours; step++) {
     const hourIndex = startHour + step;
     const rawRecord = dataset[hourIndex];
-    const events: string[] = [];
-    const stepLiquidations: TierLiquidationOrder[] = [];
 
     // Apply stress shocks to record copy
-    const record: TreasuryHourRecord = {
-      ...rawRecord,
-      withdrawals_usd: rawRecord.withdrawals_usd * outflowShockMultiplier,
-      net_flow_usd: rawRecord.deposits_usd - rawRecord.withdrawals_usd * outflowShockMultiplier,
-      tier1_repo_rate_apy: Math.max(
-        0,
-        rawRecord.tier1_repo_rate_apy + (options.rateShiftBps ?? 0) / 100.0
-      ),
-      tier3_stock_index_price:
-        rawRecord.tier3_stock_index_price *
-        (1.0 - Math.max(0, options.equityDrawdownShockPct ?? 0) / 100.0),
-    };
+    const record: TreasuryHourRecord = applyStressShocks(rawRecord, options);
 
-    // 1. Hourly accruals & MTM updates
-    portfolio.processHourlyAccruals(record);
-
-    // 2. 08:00 UTC Repo Maturity (Tier 1 releases funds)
-    if (policy !== "hold-all-cash" && record.repo_sweep_mature) {
-      const matureResult = portfolio.matureRepoAt0800();
-      if (matureResult) {
-        const msg = `Overnight Repo matured at 08:00 UTC: released ${matureResult.maturedPrincipal.format()} principal + ${matureResult.accruedInterest.format()} interest back to Cash`;
-        events.push(msg);
-        auditLogs.push({
-          hour: hourIndex,
-          timestamp: record.timestamp,
-          message: msg,
-          type: "MATURITY",
-        });
-      }
-    }
-
-    // 3. Process net hourly cash flow
-    const inbound = Money.fromDecimal(Math.max(0, record.deposits_usd), "USD");
-    const outbound = Money.fromDecimal(Math.max(0, record.withdrawals_usd), "USD");
-
-    portfolio.tier0Cash = portfolio.tier0Cash.add(inbound);
-
-    if (portfolio.tier0Cash.greaterThanOrEqual(outbound)) {
-      portfolio.tier0Cash = portfolio.tier0Cash.subtract(outbound);
-    } else {
-      // Cash deficit: unallocated cash is insufficient to pay customer withdrawals!
-      const cashDeficit = outbound.subtract(portfolio.tier0Cash);
-      portfolio.tier0Cash = Money.zero("USD");
-      shortfallEventsCount++;
-
-      const cascadeResult = portfolio.executeLiquidationCascade(cashDeficit, record);
-      stepLiquidations.push(...cascadeResult.orders);
-
-      const msg = `Liquidation Cascade triggered to cover ${cashDeficit.format()} deficit. Recovered: ${cascadeResult.totalRecoveredCash.format()}, Penalties: ${cascadeResult.totalPenaltiesPaid.format()}`;
-      events.push(msg);
-      auditLogs.push({
-        hour: hourIndex,
-        timestamp: record.timestamp,
-        message: msg,
-        type: "LIQUIDATION",
-      });
-
-      if (cascadeResult.overdraftDrawn.isPositive()) {
-        const odMsg = `Emergency Overdraft Drawn: ${cascadeResult.overdraftDrawn.format()} at 12% APR penalty`;
-        events.push(odMsg);
-        auditLogs.push({
-          hour: hourIndex,
-          timestamp: record.timestamp,
-          message: odMsg,
-          type: "OVERDRAFT",
-        });
-      }
-    }
-
-    // Check overdraft telemetry
-    if (portfolio.emergencyOverdraftBalance.isPositive()) {
-      overdraftHoursCount++;
-      if (portfolio.emergencyOverdraftBalance.greaterThan(maxOverdraftDrawn)) {
-        maxOverdraftDrawn = portfolio.emergencyOverdraftBalance;
-      }
-    }
-
-    // 4. Update rolling history bucket
-    const currentBucket = treasuryRecordToHourlyBucket(record);
-    historyBuckets.push(currentBucket);
-
-    // Keep history manageable (e.g. up to 720 hours for EWMA smoothing)
-    if (historyBuckets.length > 720) {
-      historyBuckets.shift();
-    }
-
-    // 5. Forecaster & Basel III Reserve Sizing (Policy: Reserve Juggler)
-    let requiredReserve = operationalFloor;
-    let deployableSurplus = Money.zero("USD");
-    let liquidityStatus: "HEALTHY" | "UNDER_RESERVED" | "LOW_CONFIDENCE" = "HEALTHY";
-
-    if (policy === "reserve-juggler") {
-      if (historyBuckets.length >= 24) {
-        // Run forecast
-        const forecastHorizon = forecaster.predict(historyBuckets, horizonHours);
-        let expectedCumulativeMinor = 0n;
-        for (const pred of forecastHorizon) {
-          expectedCumulativeMinor += pred.amountMinor;
-        }
-        const expectedCumulativeFlow = Money.fromMinor(expectedCumulativeMinor, "USD");
-
-        // Track residual from previous prediction
-        const actualNetMinor = currentBucket.netFlow.amountMinor;
-        const predictedMinor = forecastHorizon[0].amountMinor;
-        const residual = Number(actualNetMinor - predictedMinor) / 100.0;
-        residualHistory.push(residual);
-        if (residualHistory.length > 500) residualHistory.shift();
-
-        // Calculate 1st percentile worst-case shortfall
-        const qVal = residualHistory.length >= 20
-          ? calculateQuantile(residualHistory, alpha)
-          : -5_000_000; // Conservative fallback
-
-        const worstCaseResidualShortfall = Money.fromDecimal(qVal, "USD");
-
-        const reserveResult = computeRequiredReserve({
-          expectedCumulativeFlow,
-          worstCaseResidualShortfall,
-          operationalFloor,
-        });
-
-        requiredReserve = reserveResult.requiredReserve;
-
-        if (portfolio.tier0Cash.greaterThanOrEqual(requiredReserve)) {
-          deployableSurplus = portfolio.tier0Cash.subtract(requiredReserve);
-          liquidityStatus = "HEALTHY";
-        } else {
-          liquidityStatus = "UNDER_RESERVED";
-        }
-      } else {
-        liquidityStatus = "LOW_CONFIDENCE";
-        // Conservative fallback floor during warm-up
-        requiredReserve = operationalFloor.multiply(1.5);
-      }
-
-      // 6. 17:00 UTC Repo Sweep Window (Deploy Surplus)
-      if (record.repo_sweep_window_open && liquidityStatus === "HEALTHY" && deployableSurplus.isPositive()) {
-        const allocated = portfolio.allocateSurplus(deployableSurplus, weights, record, hourIndex);
-        const msg = `Surplus swept at 17:00 UTC: Repo=${allocated.repoAllocated.format()}, Bonds=${allocated.bondsAllocated.format()}, Equities=${allocated.equitiesAllocated.format()}`;
-        events.push(msg);
-        auditLogs.push({
-          hour: hourIndex,
-          timestamp: record.timestamp,
-          message: msg,
-          type: "SWEEP",
-        });
-      }
-    } else if (policy === "fixed-buffer") {
-      // Fixed Buffer Policy: static floor
-      requiredReserve = operationalFloor;
-      if (portfolio.tier0Cash.greaterThan(requiredReserve)) {
-        deployableSurplus = portfolio.tier0Cash.subtract(requiredReserve);
-        if (record.repo_sweep_window_open && deployableSurplus.isPositive()) {
-          portfolio.allocateSurplus(deployableSurplus, weights, record, hourIndex);
-        }
-      } else {
-        liquidityStatus = "UNDER_RESERVED";
-      }
-    } else {
-      // Hold All Cash Policy: 100% in Tier 0 Cash
-      requiredReserve = operationalFloor;
-      deployableSurplus = Money.zero("USD");
-      liquidityStatus = portfolio.tier0Cash.greaterThanOrEqual(requiredReserve)
-        ? "HEALTHY"
-        : "UNDER_RESERVED";
-    }
-
-    // 7. Snapshot Frame
-    const snapshot = portfolio.getSnapshot(hourIndex, record.timestamp);
-    frames.push({
-      hourIndex,
-      timestamp: record.timestamp,
-      depositsUsd: record.deposits_usd,
-      withdrawalsUsd: record.withdrawals_usd,
-      netFlowUsd: record.net_flow_usd,
-      portfolio: snapshot,
-      requiredReserveMinor: requiredReserve.amountMinor.toString(),
-      deployableSurplusMinor: deployableSurplus.amountMinor.toString(),
-      liquidityStatus,
-      events,
-      liquidations: stepLiquidations,
-    });
+    const result = stepTreasury(state, record, hourIndex, ctx);
+    frames.push(result.frame);
+    auditLogs.push(...result.auditLogs);
   }
 
+  const portfolio = state.portfolio;
   const finalAssets = portfolio.getTotalNetAssets();
   const netPnl = finalAssets.subtract(initialAssets);
   const annualizedNetReturnPct =
@@ -377,9 +170,9 @@ export function runTimelineSimulation(
     grossYieldEarnedUsd: portfolio.cumulativeGrossYieldEarned.toDecimal(),
     penaltiesPaidUsd: portfolio.cumulativePenaltiesPaid.toDecimal(),
     overdraftInterestPaidUsd: portfolio.cumulativeOverdraftInterestPaid.toDecimal(),
-    shortfallEventsCount,
-    overdraftHoursCount,
-    maxOverdraftDrawnUsd: maxOverdraftDrawn.toDecimal(),
+    shortfallEventsCount: state.shortfallEventsCount,
+    overdraftHoursCount: state.overdraftHoursCount,
+    maxOverdraftDrawnUsd: state.maxOverdraftDrawn.toDecimal(),
     maxTier3DrawdownPct: Math.round(
       portfolio.getSnapshot(startHour + maxHours - 1, "").tier3DrawdownPct * 100
     ) / 100,

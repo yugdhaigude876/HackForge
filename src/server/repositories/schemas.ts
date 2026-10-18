@@ -37,11 +37,11 @@ export const OrgDocSchema = z.object({
 });
 
 export const MemberDocSchema = z.object({
-  orgId: z.string().min(1),
-  uid: z.string().min(1),
+  orgId: z.string().min(1).optional(),
+  uid: z.string().min(1).optional(),
   role: MemberRoleSchema,
-  createdAt: z.unknown(),
-  createdBy: z.string().min(1),
+  createdAt: z.unknown().optional(),
+  createdBy: z.string().optional().default("system"),
 });
 
 export const InstrumentDocSchema = z.object({
