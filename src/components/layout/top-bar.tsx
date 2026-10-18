@@ -8,7 +8,7 @@ interface TopBarProps {
   clockTimestamp?: string;
   isRepoWindowOpen?: boolean;
   isRepoMaturing?: boolean;
-  repoMaturedYieldUsd?: number;
+  repoMaturedYieldUsd?: number | null;
   solvencyStatus?: "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED";
   mase?: number | null;
   confidence?: number;
@@ -29,7 +29,7 @@ export function TopBar({
   clockTimestamp = "2026-01-01 17:00:00 UTC",
   isRepoWindowOpen = true,
   isRepoMaturing = false,
-  repoMaturedYieldUsd = 2450.12,
+  repoMaturedYieldUsd = null,
   solvencyStatus = "HEALTHY",
   mase = 0.85,
   confidence = 0.99,
@@ -46,7 +46,7 @@ export function TopBar({
   onToggleMobileNav,
 }: TopBarProps) {
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#1E2536] bg-[#0B0E14]/90 px-4 lg:px-6 backdrop-blur">
+    <header data-testid="top-bar" className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#1E2536] bg-[#0B0E14]/90 px-4 lg:px-6 backdrop-blur">
       {/* Left: Mobile Nav toggle + Clock & Replay Ticker */}
       <div className="flex items-center gap-3">
         <Button
@@ -135,7 +135,9 @@ export function TopBar({
         ) : isRepoMaturing ? (
           <div className="hidden md:flex items-center gap-2 rounded-lg bg-[#22C55E]/20 border border-[#22C55E]/40 px-3 py-1.5 text-xs font-bold text-[#22C55E] animate-pulse">
             <span className="h-2 w-2 rounded-full bg-[#22C55E]" />
-            <span>REPO MATURED: +${repoMaturedYieldUsd.toLocaleString()} EARNED</span>
+            <span>
+              REPO MATURED: {repoMaturedYieldUsd != null ? `+$${repoMaturedYieldUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} EARNED` : "—"}
+            </span>
           </div>
         ) : (
           <div className="hidden md:flex items-center gap-2 rounded-lg bg-[#121620] border border-[#1E2536] px-3 py-1.5 text-xs font-mono text-[#94A3B8]">
@@ -182,10 +184,17 @@ export function TopBar({
         ) : solvencyStatus === "LOW_CONFIDENCE" ? (
           <div
             data-testid="decision-status-value"
-            className="flex items-center gap-2 rounded-lg bg-[#F59E0B]/15 border border-[#F59E0B]/40 px-3.5 py-1.5 text-xs font-bold text-[#F59E0B]"
+            title="Warm-up period: needs 168 h of history"
+            className="flex items-center gap-2 rounded-lg bg-[#F59E0B]/15 border border-[#F59E0B]/40 px-3.5 py-1.5 text-xs font-bold text-[#F59E0B] cursor-help"
           >
             <AlertTriangle className="h-4 w-4" />
             <span>LOW CONFIDENCE</span>
+            <span
+              title="Warm-up period: needs 168 h of history"
+              className="hidden sm:inline font-mono text-[10px] text-[#F59E0B]/90 font-normal underline decoration-dotted"
+            >
+              (needs 168 h of history)
+            </span>
             <span
               data-testid="mase-chip"
               className="hidden md:inline font-mono text-[10px] text-[#F59E0B]/80 font-normal"

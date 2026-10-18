@@ -8,10 +8,27 @@
  * for consumption by forecasting models, Basel III reserve sizing, and the 4-tier engine.
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import { Money } from "@/engine/money";
 import { HourlyBucket } from "@/engine/models";
+import { SAMPLE_168H_BENCHMARK_CSV } from "@/engine/sample-benchmark-data";
+
+function getNodeFs(): typeof import("node:fs") | null {
+  if (typeof window !== "undefined") return null;
+  try {
+    return eval("require")("node:fs");
+  } catch {
+    return null;
+  }
+}
+
+function getNodePath(): typeof import("node:path") | null {
+  if (typeof window !== "undefined") return null;
+  try {
+    return eval("require")("node:path");
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 16-column typed record conforming to the official 4-tier treasury dataset.
@@ -178,6 +195,17 @@ export function loadTreasuryDataset(customPath?: string): TreasuryHourRecord[] {
     return cachedRecords;
   }
 
+  const fs = getNodeFs();
+  const path = getNodePath();
+
+  if (!fs || !path) {
+    const sampleRecords = parseTreasuryCSV(SAMPLE_168H_BENCHMARK_CSV);
+    if (!customPath) {
+      cachedRecords = sampleRecords;
+    }
+    return sampleRecords;
+  }
+
   const candidatePaths = customPath
     ? [customPath]
     : [
@@ -198,9 +226,11 @@ export function loadTreasuryDataset(customPath?: string): TreasuryHourRecord[] {
   }
 
   if (!csvContent) {
-    throw new Error(
-      `Treasury dataset file not found. Checked candidate paths: ${candidatePaths.join(", ")}`
-    );
+    const sampleRecords = parseTreasuryCSV(SAMPLE_168H_BENCHMARK_CSV);
+    if (!customPath) {
+      cachedRecords = sampleRecords;
+    }
+    return sampleRecords;
   }
 
   const records = parseTreasuryCSV(csvContent);

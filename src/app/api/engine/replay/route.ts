@@ -133,34 +133,4 @@ const authenticatedReplayHandler = withAuth(
   { minRole: "viewer" }
 );
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
-  const hasOrgHeader = Boolean(request.headers.get("x-org-id"));
-  if (hasOrgHeader) {
-    return authenticatedReplayHandler(request);
-  }
-
-  // Local/unauthenticated fallback simulation
-  try {
-    const bodyResult = await parseJsonBody(request, ReplayRequestSchema);
-    if (!bodyResult.success) {
-      return bodyResult.response;
-    }
-    const data = executeSimulation(bodyResult.data);
-    return NextResponse.json({
-      ok: true,
-      data,
-    });
-  } catch (err) {
-    console.warn("[api/engine/replay fallback execution error]:", err);
-    return NextResponse.json(
-      {
-        ok: false,
-        error: {
-          code: "INTERNAL",
-          message: "Timeline simulation failed.",
-        },
-      },
-      { status: 500 }
-    );
-  }
-}
+export const POST = authenticatedReplayHandler;

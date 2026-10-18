@@ -36,7 +36,7 @@ describe("LoginForm Component", () => {
     expect(screen.getByLabelText("Password")).toBeDefined();
     expect(screen.getByRole("button", { name: "Sign In to Terminal" })).toBeDefined();
     expect(screen.getByRole("button", { name: /Continue with Google/i })).toBeDefined();
-    expect(screen.getByText("One-Click Demo Personas")).toBeDefined();
+    expect(screen.getByText("Demo Persona Emails")).toBeDefined();
   });
 
   it("toggles between Sign In and Create Account modes", async () => {
@@ -57,7 +57,7 @@ describe("LoginForm Component", () => {
     expect(screen.getByRole("button", { name: "Create Account" })).toBeDefined();
   });
 
-  it("triggers demo persona sign-in", async () => {
+  it("fills persona email without password when clicked", async () => {
     render(
       <AuthProvider forceMock={true}>
         <LoginForm />
@@ -67,13 +67,12 @@ describe("LoginForm Component", () => {
     const analystButton = screen.getByRole("button", { name: /Analyst/i });
     await act(async () => {
       fireEvent.click(analystButton);
-      await vi.waitFor(
-        () => {
-          expect(mockReplace).toHaveBeenCalledWith("/dashboard");
-        },
-        { timeout: 2000 },
-      );
     });
+
+    const emailInput = screen.getByLabelText("Work Email") as HTMLInputElement;
+    const passwordInput = screen.getByLabelText("Password") as HTMLInputElement;
+    expect(emailInput.value).toBe("analyst@reservejuggler.internal");
+    expect(passwordInput.value).toBe("");
   });
 
 

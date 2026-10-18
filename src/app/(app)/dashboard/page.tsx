@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "@/lib/firebase/auth-context";
 import { useDashboardData } from "@/hooks/use-dashboard-data";
+import { useReplaySimulation } from "@/hooks/use-replay-simulation";
 import { TopBar } from "@/components/layout/top-bar";
 import { KpiGrid } from "@/components/dashboard/kpi-grid";
 import { ForecastChart } from "@/components/dashboard/forecast-chart";
@@ -10,15 +11,14 @@ import { AssetAllocationDonut } from "@/components/dashboard/asset-allocation-do
 import { TierLedgerTable, type TierLedgerItem } from "@/components/dashboard/tier-ledger-table";
 import { RightCommandPanel } from "@/components/dashboard/right-command-panel";
 import { AlphaComparison } from "@/components/dashboard/alpha-comparison";
-import { ExplainabilityCard } from "@/components/dashboard/explainability-card";
 import { LoadingState, ErrorState } from "@/components/finance/panels";
 import { FallbackBanner } from "@/components/ui/fallback-banner";
 import { useDataSource, type DataSource } from "@/components/providers/data-source-provider";
 import { Button } from "@/components/ui/primitives";
 import { sampleBalances, sampleNetFlow } from "@/lib/sample-data";
-import { formatMinor } from "@/lib/money";
-import { ShieldAlert, Play, Loader2 } from "lucide-react";
-import type { TimelineSimulationResult } from "@/engine/simulator";
+import { formatCurrency, formatCompactMinor } from "@/lib/money";
+import { generateAuditCsv } from "@/lib/csv-export";
+import { ShieldAlert, Play, Loader2, Database, Activity, RefreshCw } from "lucide-react";
 
 const sampleForecastPredictions = [
   { hour: 1, mean: 1_200_000_00, bandLower: 800_000_00, bandUpper: 1_600_000_00 },
@@ -51,13 +51,13 @@ export default function DashboardPage() {
   const { user, isMock } = useAuth();
   const { setSource } = useDataSource();
   const {
-    status,
+    status: dashboardStatus,
     data,
-    error,
+    error: dashboardError,
     retryAfterSeconds,
     isFallback,
     fallbackRequestId,
-    refresh,
+    refresh: refreshDashboard,
     run,
     isRunning,
   } = useDashboardData();
@@ -66,7 +66,7 @@ export default function DashboardPage() {
   const userRole = data?.userRole ?? "viewer";
   const canRunEngine = isLive && userRole !== "viewer";
 
-  // Real or synthetic decision & forecast
+  // Stored live decision & forecast from Firestore (if present)
   const liveDecision = data?.decision ?? null;
   const liveForecast = data?.forecast ?? null;
 
@@ -80,50 +80,70 @@ export default function DashboardPage() {
     }
   }, [isFallback, isLive, liveDecision?.source, setSource]);
 
-  // Replay simulation state
-  const [replayHour, setReplayHour] = useState<number>(17);
+  // Replay control states
+  const [userReplayHour, setUserReplayHour] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(10);
   const [outflowShockPct, setOutflowShockPct] = useState<number>(0);
   const [settlementDelayHours, setSettlementDelayHours] = useState<number>(0);
   const [rateSpikeActive, setRateSpikeActive] = useState<boolean>(false);
-  const [simResult, setSimResult] = useState<TimelineSimulationResult | null>(null);
   const playTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch replay simulation in background for rich telemetry
-  useEffect(() => {
-    let ignore = false;
-    const fetchReplay = async () => {
-      try {
-        const res = await fetch("/api/engine/replay", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            maxHours: 168,
-            policy: "reserve-juggler",
-            initialCashUsd: 50_000_000,
-            operationalFloorUsd: 5_000_000,
-            outflowShockPct,
-            settlementLagHours: settlementDelayHours,
-            rateShiftBps: rateSpikeActive ? 200 : 0,
-            subsampleStep: 1,
-          }),
-        });
-        if (!ignore && res.ok) {
-          const json = await res.json();
-          if (json.ok && json.data) {
-            setSimResult(json.data);
-          }
-        }
-      } catch {
-        // Fallback gracefully
-      }
-    };
-    fetchReplay();
-    return () => {
-      ignore = true;
-    };
-  }, [outflowShockPct, settlementDelayHours, rateSpikeActive]);
+  // Hook-based replay simulation: debounced, cancellable, dual-mode
+  const {
+    status: replayStatus,
+    result: simResult,
+    error: replayError,
+    source: replaySource,
+    refresh: refreshReplay,
+  } = useReplaySimulation({
+    maxHours: 168,
+    policy: "reserve-juggler",
+    initialCashUsd: 50_000_000,
+    operationalFloorUsd: 5_000_000,
+    outflowShockPct,
+    settlementLagHours: settlementDelayHours,
+    rateShiftBps: rateSpikeActive ? 200 : 0,
+    subsampleStep: 1,
+  });
+
+  // Calculate first sweep and first liquidation hours from real simulation
+  const firstSweepHour = useMemo<number | null>(() => {
+    if (!simResult?.frames) return null;
+    const sweepLog = simResult.auditLogs?.find((l) => l.type === "SWEEP");
+    if (sweepLog) return sweepLog.hour;
+    const idx = simResult.frames.findIndex((f) => {
+      const p = f.portfolio;
+      return (
+        p.tier1RepoPrincipal.amountMinor > 0n ||
+        p.tier2BondsMarketValue.amountMinor > 0n ||
+        p.tier3EquitiesMarketValue.amountMinor > 0n
+      );
+    });
+    return idx >= 0 ? idx : null;
+  }, [simResult]);
+
+  const firstLiquidationHour = useMemo<number | null>(() => {
+    if (!simResult?.frames) return null;
+    const liqLog = simResult.auditLogs?.find(
+      (l) => l.type === "LIQUIDATION" || l.type === "OVERDRAFT"
+    );
+    if (liqLog) return liqLog.hour;
+    const idx = simResult.frames.findIndex((f) => f.liquidations && f.liquidations.length > 0);
+    return idx >= 0 ? idx : null;
+  }, [simResult]);
+
+  // Default replayHour to first meaningful activity (first frame where funds hold in tiers 1-3 or first SWEEP)
+  const replayHour = userReplayHour ?? firstSweepHour ?? 0;
+  const setReplayHour = useCallback(
+    (val: number | ((prev: number) => number)) => {
+      setUserReplayHour((current) => {
+        const base = current ?? firstSweepHour ?? 0;
+        return typeof val === "function" ? val(base) : val;
+      });
+    },
+    [firstSweepHour]
+  );
 
   // Replay playback ticker
   useEffect(() => {
@@ -143,7 +163,7 @@ export default function DashboardPage() {
         clearInterval(playTimerRef.current);
       }
     };
-  }, [isPlaying, playbackSpeed]);
+  }, [isPlaying, playbackSpeed, setReplayHour]);
 
   const handlePlayToggle = () => setIsPlaying((prev) => !prev);
   const handleStepHour = () => {
@@ -158,256 +178,173 @@ export default function DashboardPage() {
     setIsPlaying(false);
     setReplayHour(hour);
   };
-
-  // 1-Click Crisis Preset Handler (Criterion 3)
-  const handleApplyPreset = (preset: "normal" | "payday" | "black_swan") => {
-    setIsPlaying(false);
-    if (preset === "normal") {
-      setReplayHour(17);
-      setOutflowShockPct(0);
-      setSettlementDelayHours(0);
-      setRateSpikeActive(false);
-    } else if (preset === "payday") {
-      setReplayHour(8);
-      setOutflowShockPct(0);
-      setSettlementDelayHours(0);
-      setRateSpikeActive(false);
-    } else if (preset === "black_swan") {
-      setReplayHour(2);
-      setOutflowShockPct(45);
-      setSettlementDelayHours(48);
-      setRateSpikeActive(true);
+  const handleJumpToFirstSweep = useCallback(() => {
+    if (firstSweepHour !== null) {
+      setIsPlaying(false);
+      setReplayHour(firstSweepHour);
     }
-  };
+  }, [firstSweepHour, setReplayHour]);
+  const handleJumpToFirstLiquidation = useCallback(() => {
+    if (firstLiquidationHour !== null) {
+      setIsPlaying(false);
+      setReplayHour(firstLiquidationHour);
+    }
+  }, [firstLiquidationHour, setReplayHour]);
 
-  // Clock calculations
-  const clockHourOfDay = replayHour % 24;
-  const clockDay = Math.floor(replayHour / 24) + 1;
-  const clockTimestamp = `2026-03-${String(14 + clockDay).padStart(2, "0")} ${String(clockHourOfDay).padStart(2, "0")}:00:00 UTC`;
-  const isRepoWindowOpen = clockHourOfDay >= 17 || clockHourOfDay < 8;
-  const isRepoMaturing = clockHourOfDay === 8;
+  const handleApplyPreset = useCallback(
+    (preset: "normal" | "payday" | "black_swan") => {
+      setIsPlaying(false);
+      if (preset === "normal") {
+        setReplayHour(17);
+        setOutflowShockPct(0);
+        setSettlementDelayHours(0);
+        setRateSpikeActive(false);
+      } else if (preset === "payday") {
+        setReplayHour(8);
+        setOutflowShockPct(0);
+        setSettlementDelayHours(0);
+        setRateSpikeActive(false);
+      } else if (preset === "black_swan") {
+        setReplayHour(2);
+        setOutflowShockPct(45);
+        setSettlementDelayHours(48);
+        setRateSpikeActive(true);
+      }
+    },
+    [setReplayHour]
+  );
 
-  // Active replay frame (if available)
+  // Active replay frame (single source of truth for telemetry)
   const activeFrame = useMemo(() => {
     if (!simResult?.frames || simResult.frames.length === 0) return null;
+    const exact = simResult.frames.find((f) => f.hour === replayHour);
+    if (exact) return exact;
     const idx = Math.min(Math.max(0, replayHour), simResult.frames.length - 1);
     return simResult.frames[idx];
   }, [simResult, replayHour]);
 
-  // Base balances
-  const baseCashMinor = useMemo<bigint>(() => {
-    if (isLive && liveDecision) {
-      return BigInt(liveDecision.availableCashMinor);
+  // Real clock timestamps from activeFrame
+  const clockTimestamp = useMemo(() => {
+    if (!activeFrame?.timestamp) return "2026-01-01 00:00:00 UTC";
+    return activeFrame.timestamp.replace("T", " ").replace("Z", " UTC");
+  }, [activeFrame]);
+
+  const clockHourOfDay = useMemo(() => {
+    if (!activeFrame?.timestamp) return replayHour % 24;
+    const match = activeFrame.timestamp.match(/T(\d{2}):/);
+    return match ? parseInt(match[1], 10) : replayHour % 24;
+  }, [activeFrame, replayHour]);
+
+  const isRepoWindowOpen = clockHourOfDay >= 17 || clockHourOfDay < 8;
+  const isRepoMaturing = clockHourOfDay === 8;
+
+  // Real repo matured yield calculation at 08:00 (delta from previous hour)
+  const repoMaturedYieldUsd = useMemo<number | null>(() => {
+    if (clockHourOfDay !== 8 || !activeFrame || !simResult?.frames) return null;
+    const currentIdx = Math.min(Math.max(0, replayHour), simResult.frames.length - 1);
+    if (currentIdx === 0) {
+      const earned = activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
+      return Number(earned) / 100;
     }
+    const prevFrame = simResult.frames[currentIdx - 1];
+    if (!prevFrame) return null;
+    const deltaMinor =
+      activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor -
+      prevFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
+    return Number(deltaMinor) / 100;
+  }, [clockHourOfDay, activeFrame, replayHour, simResult]);
+
+  // Balances derived directly from activeFrame
+  const availableCashMinor = useMemo<bigint>(() => {
     if (activeFrame?.portfolio) {
-      return BigInt(activeFrame.portfolio.tier0Cash.amountMinor || "5000000000");
+      return activeFrame.portfolio.tier0Cash.amountMinor;
     }
     return BigInt(sampleBalances.totalCash);
-  }, [isLive, liveDecision, activeFrame]);
+  }, [activeFrame]);
 
-  const baseReserveMinor = useMemo<bigint>(() => {
-    if (isLive && liveDecision) {
-      return BigInt(liveDecision.reserveMinor);
-    }
+  const requiredReserveMinor = useMemo<bigint>(() => {
     if (activeFrame) {
-      return BigInt(activeFrame.requiredReserveMinor || "1650000000");
+      return activeFrame.requiredReserveMinor;
     }
     return BigInt(sampleBalances.requiredReserve);
-  }, [isLive, liveDecision, activeFrame]);
+  }, [activeFrame]);
 
-  // Real-time Stress Simulation (Instant Self-Healing & Deficit Sizing)
-  const isUnderStress = outflowShockPct > 0 || settlementDelayHours > 0 || rateSpikeActive;
-
-  const outflowSurgeMinor = useMemo<bigint>(() => {
-    if (outflowShockPct <= 0) return 0n;
-    return (baseCashMinor * BigInt(outflowShockPct)) / 100n;
-  }, [baseCashMinor, outflowShockPct]);
-
-  const availableCashMinor = useMemo<bigint>(() => {
-    if (outflowSurgeMinor >= baseCashMinor) return 0n;
-    return baseCashMinor - outflowSurgeMinor;
-  }, [baseCashMinor, outflowSurgeMinor]);
-
-  const stressAddOnMinor = useMemo<bigint>(() => {
-    let addOn = 0n;
-    if (settlementDelayHours > 0) {
-      addOn += BigInt(settlementDelayHours) * 10_000_000n; // $100k per hour delay
-    }
-    if (rateSpikeActive) {
-      addOn += 3_000_000_00n; // $3M rate shock buffer
-    }
-    return addOn;
-  }, [settlementDelayHours, rateSpikeActive]);
-
-  const requiredReserveMinor = baseReserveMinor + stressAddOnMinor;
-
-  // Stressed Solvency Status
-  const effectiveStatus = useMemo<"HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED">(() => {
-    if (isUnderStress && availableCashMinor < requiredReserveMinor) {
-      return "UNDER_RESERVED";
-    }
-    if (isLive && liveDecision) {
-      return liveDecision.status as "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED";
-    }
-    return "HEALTHY";
-  }, [isUnderStress, availableCashMinor, requiredReserveMinor, isLive, liveDecision]);
-
-  const deficitAmountMinor = useMemo<bigint>(() => {
-    if (availableCashMinor < requiredReserveMinor) {
-      return requiredReserveMinor - availableCashMinor;
-    }
-    return 0n;
-  }, [availableCashMinor, requiredReserveMinor]);
-
-  const deficitAmountUsd = Number(deficitAmountMinor) / 100;
-
-  // Deployable surplus: locked strictly to $0 when UNDER_RESERVED!
   const deployableSurplusMinor = useMemo<bigint>(() => {
-    if (effectiveStatus === "UNDER_RESERVED") {
-      return 0n;
+    if (activeFrame) {
+      return activeFrame.deployableSurplusMinor;
     }
-    if (availableCashMinor > requiredReserveMinor) {
-      return availableCashMinor - requiredReserveMinor;
+    return BigInt(sampleBalances.deployedSurplus);
+  }, [activeFrame]);
+
+  const netYieldMinor = useMemo<bigint>(() => {
+    if (activeFrame?.portfolio) {
+      const gross = activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor;
+      const pen = activeFrame.portfolio.cumulativePenaltiesPaid.amountMinor;
+      const od = activeFrame.portfolio.cumulativeOverdraftInterestPaid.amountMinor;
+      const net = gross - pen - od;
+      return net > 0n ? net : 0n;
     }
     return 0n;
-  }, [effectiveStatus, availableCashMinor, requiredReserveMinor]);
+  }, [activeFrame]);
 
-  const netYieldMinor: bigint =
-    isLive && liveDecision?.expectedNetYieldMinor
-      ? BigInt(liveDecision.expectedNetYieldMinor)
-      : 342_120_00n;
-
-  // Living Audit Stream with Stress & Cascade Events
-  const dynamicAuditLogs = useMemo(() => {
-    const logs = [
-      {
-        id: "log-1",
-        timestamp: "17:00:00",
-        type: "SWEEP" as const,
-        message: "$33.5M swept into Tier 1 Repo @ 4.29% APY",
-      },
-      {
-        id: "log-2",
-        timestamp: "08:00:00",
-        type: "MATURE" as const,
-        message: "Tier 1 Repo matured: +$2,450.12 interest credited",
-      },
-      {
-        id: "log-3",
-        timestamp: "14:00:00",
-        type: "WARN" as const,
-        message: "Volatility spike: VaR 99% increased required reserve to $18.2M",
-      },
-      {
-        id: "log-4",
-        timestamp: "02:15:00",
-        type: "DEFICIT" as const,
-        message: "Outflow surge detected. Auto-liquidated $2.1M from Tier 1 (0.5% fee). Avoided 12% emergency overdraft.",
-      },
-    ];
-
-    if (effectiveStatus === "UNDER_RESERVED") {
-      logs.unshift({
-        id: `shock-${outflowShockPct}-${clockTimestamp}`,
-        timestamp: clockTimestamp.slice(11, 19),
-        type: "DEFICIT",
-        message: `[OUTFLOW RUN] +${outflowShockPct}% shock caused $${deficitAmountUsd.toLocaleString()} deficit. Auto-liquidated from Tier 1 Repo (0.5% haircut) & Tier 2 Bonds (2.0% haircut). Prevented 12% central bank penalty.`,
-      });
-    } else if (outflowShockPct > 0) {
-      logs.unshift({
-        id: `warn-${outflowShockPct}`,
-        timestamp: clockTimestamp.slice(11, 19),
-        type: "WARN",
-        message: `[STRESS ACTIVE] +${outflowShockPct}% outflow shock absorbed. Available cash buffer held at ${formatMinor(availableCashMinor)}.`,
-      });
-    }
-
-    return logs;
-  }, [effectiveStatus, outflowShockPct, deficitAmountUsd, clockTimestamp, availableCashMinor]);
-
-  // 4-Tier Ledger Items
+  // 4-Tier Ledger Items derived from activeFrame
   const tierLedgerItems = useMemo<TierLedgerItem[]>(() => {
-    if (isLive && liveDecision?.allocations && liveDecision.allocations.length > 0) {
-      const items: TierLedgerItem[] = [
+    if (activeFrame?.portfolio) {
+      const p = activeFrame.portfolio;
+      return [
         {
           tierId: "tier0_cash",
           tierNumber: 0,
           name: "Tier 0: Cash Buffer",
           subName: "Instant Liquid · Operational Reserve (R)",
-          balanceMinor: requiredReserveMinor,
-          balanceUsd: Number(requiredReserveMinor) / 100,
+          balanceMinor: p.tier0Cash.amountMinor,
+          balanceUsd: Number(p.tier0Cash.amountMinor) / 100,
           rateLabel: "0.00% APY",
           liquidity: "Instant (T+0)",
           friction: "0.0% Fee",
           priority: 1,
           accentColor: "#94A3B8",
-          capacityMinor: 100_000_000_00n,
+        },
+        {
+          tierId: "tier1_repo",
+          tierNumber: 1,
+          name: "Tier 1: Overnight Repo",
+          subName: "Swept 17:00 UTC · Matures 08:00 UTC",
+          balanceMinor: p.tier1RepoPrincipal.amountMinor,
+          balanceUsd: Number(p.tier1RepoPrincipal.amountMinor) / 100,
+          rateLabel: "4.29% APY",
+          liquidity: "Overnight (17:00–08:00)",
+          friction: "0.5% Early break",
+          priority: 2,
+          accentColor: "#A3E635",
+        },
+        {
+          tierId: "tier2_bonds",
+          tierNumber: 2,
+          name: "Tier 2: 2Y Sovereign Debt",
+          subName: "US Treasury · D_mod = 1.92 · MTM",
+          balanceMinor: p.tier2BondsMarketValue.amountMinor,
+          balanceUsd: Number(p.tier2BondsMarketValue.amountMinor) / 100,
+          rateLabel: "4.80% YTM",
+          liquidity: "MTM (T+1h)",
+          friction: "2.0% Haircut",
+          priority: 3,
+          accentColor: "#06B6D4",
+        },
+        {
+          tierId: "tier3_equities",
+          tierNumber: 3,
+          name: "Tier 3: Growth Equities",
+          subName: "Index Tracking · σ = 18.0% Volatility",
+          balanceMinor: p.tier3EquitiesMarketValue.amountMinor,
+          balanceUsd: Number(p.tier3EquitiesMarketValue.amountMinor) / 100,
+          rateLabel: "10.00% APY",
+          liquidity: "Continuous (T+2h)",
+          friction: "15.0% Slippage",
+          priority: 4,
+          accentColor: "#F59E0B",
         },
       ];
-
-      liveDecision.allocations.forEach((alloc, idx) => {
-        const isRepo = alloc.name.toLowerCase().includes("repo");
-        const isBond =
-          alloc.name.toLowerCase().includes("bond") || alloc.name.toLowerCase().includes("treasury");
-        const priority = idx + 2;
-        const accent = isRepo ? "#A3E635" : isBond ? "#06B6D4" : "#F59E0B";
-        const liquidity = isRepo
-          ? "Overnight (17:00–08:00)"
-          : alloc.settlementLagHours === 0
-          ? "Instant"
-          : `T+${alloc.settlementLagHours}h`;
-        const friction =
-          alloc.penaltyBps > 0
-            ? `${(alloc.penaltyBps / 100).toFixed(1)}% Early exit`
-            : "0% Penalty";
-
-        items.push({
-          tierId: alloc.instrumentId,
-          tierNumber: priority - 1,
-          name: alloc.name,
-          subName: `Allocation · Rate ${(alloc.annualRateBps / 100).toFixed(2)}% APY`,
-          balanceMinor: BigInt(alloc.amountMinor || "0"),
-          balanceUsd: Number(BigInt(alloc.amountMinor || "0")) / 100,
-          rateLabel: `${(alloc.annualRateBps / 100).toFixed(2)}% APY`,
-          liquidity,
-          friction,
-          priority,
-          accentColor: accent,
-          capacityMinor: BigInt(alloc.capacityMinor || alloc.amountMinor || "0"),
-        });
-      });
-
-      return items;
-    }
-
-    // Default 4 Tiers with interactive stress reduction
-    let repoBalance = 25_000_000_00n;
-    let bondBalance = 15_000_000_00n;
-    let equityBalance = 10_000_000_00n;
-
-    // Simulate cascade liquidation deductions under deficit
-    if (deficitAmountMinor > 0n) {
-      let rem = deficitAmountMinor;
-      if (repoBalance >= rem) {
-        repoBalance -= rem;
-        rem = 0n;
-      } else {
-        rem -= repoBalance;
-        repoBalance = 0n;
-        if (bondBalance >= rem) {
-          bondBalance -= rem;
-          rem = 0n;
-        } else {
-          rem -= bondBalance;
-          bondBalance = 0n;
-          if (equityBalance >= rem) {
-            equityBalance -= rem;
-            rem = 0n;
-          } else {
-            equityBalance = 0n;
-          }
-        }
-      }
     }
 
     return [
@@ -416,8 +353,8 @@ export default function DashboardPage() {
         tierNumber: 0,
         name: "Tier 0: Cash Buffer",
         subName: "Instant Liquid · Operational Reserve (R)",
-        balanceMinor: availableCashMinor,
-        balanceUsd: Number(availableCashMinor) / 100,
+        balanceMinor: 50_000_000_00n,
+        balanceUsd: 50_000_000,
         rateLabel: "0.00% APY",
         liquidity: "Instant (T+0)",
         friction: "0.0% Fee",
@@ -429,8 +366,8 @@ export default function DashboardPage() {
         tierNumber: 1,
         name: "Tier 1: Overnight Repo",
         subName: "Swept 17:00 UTC · Matures 08:00 UTC",
-        balanceMinor: repoBalance,
-        balanceUsd: Number(repoBalance) / 100,
+        balanceMinor: 0n,
+        balanceUsd: 0,
         rateLabel: "4.29% APY",
         liquidity: "Overnight (17:00–08:00)",
         friction: "0.5% Early break",
@@ -442,8 +379,8 @@ export default function DashboardPage() {
         tierNumber: 2,
         name: "Tier 2: 2Y Sovereign Debt",
         subName: "US Treasury · D_mod = 1.92 · MTM",
-        balanceMinor: bondBalance,
-        balanceUsd: Number(bondBalance) / 100,
+        balanceMinor: 0n,
+        balanceUsd: 0,
         rateLabel: "4.80% YTM",
         liquidity: "MTM (T+1h)",
         friction: "2.0% Haircut",
@@ -455,8 +392,8 @@ export default function DashboardPage() {
         tierNumber: 3,
         name: "Tier 3: Growth Equities",
         subName: "Index Tracking · σ = 18.0% Volatility",
-        balanceMinor: equityBalance,
-        balanceUsd: Number(equityBalance) / 100,
+        balanceMinor: 0n,
+        balanceUsd: 0,
         rateLabel: "10.00% APY",
         liquidity: "Continuous (T+2h)",
         friction: "15.0% Slippage",
@@ -464,86 +401,71 @@ export default function DashboardPage() {
         accentColor: "#F59E0B",
       },
     ];
-  }, [isLive, liveDecision, requiredReserveMinor, availableCashMinor, deficitAmountMinor]);
+  }, [activeFrame]);
 
-  // Donut balances
+  // Donut balances derived from activeFrame
   const donutBalances = useMemo(() => {
+    if (activeFrame?.portfolio) {
+      const p = activeFrame.portfolio;
+      return {
+        cashMinor: p.tier0Cash?.amountMinor ?? 0n,
+        repoMinor: p.tier1RepoPrincipal?.amountMinor ?? 0n,
+        bondsMinor: p.tier2BondsMarketValue?.amountMinor ?? 0n,
+        equitiesMinor: p.tier3EquitiesMarketValue?.amountMinor ?? 0n,
+        overdraftMinor: p.emergencyOverdraftBalance?.amountMinor ?? 0n,
+      };
+    }
     return {
       cashMinor: availableCashMinor,
-      repoMinor: tierLedgerItems.find((i) => i.tierId.includes("repo"))?.balanceMinor ?? 25_000_000_00n,
-      bondsMinor: tierLedgerItems.find((i) => i.tierId.includes("bond"))?.balanceMinor ?? 15_000_000_00n,
-      equitiesMinor: tierLedgerItems.find((i) => i.tierId.includes("equit"))?.balanceMinor ?? 10_000_000_00n,
-      overdraftMinor: deficitAmountMinor > 50_000_000_00n ? deficitAmountMinor - 50_000_000_00n : 0n,
+      repoMinor: 0n,
+      bondsMinor: 0n,
+      equitiesMinor: 0n,
+      overdraftMinor: 0n,
     };
-  }, [availableCashMinor, tierLedgerItems, deficitAmountMinor]);
+  }, [activeFrame, availableCashMinor]);
 
-  // Trigger 17:00 Sweep quick action
+  // Quick actions
   const handleTriggerSweep = useCallback(() => {
     setIsPlaying(false);
     setReplayHour(17);
-  }, []);
+  }, [setReplayHour]);
 
-  // Run stress test quick action
   const handleRunStressTest = useCallback(() => {
-    setOutflowShockPct((prev) => (prev === 0 ? 35 : 0));
+    setOutflowShockPct((prev) => (prev === 0 ? 25 : 0));
   }, []);
 
-  // Live auto-updating audit logs driven by simulation ticker
-  const liveAuditLogs = useMemo(() => {
-    const logs: Array<{
-      id: string;
-      timestamp: string;
-      type: "SWEEP" | "MATURE" | "WARN" | "DEFICIT" | "INFO";
-      message: string;
-    }> = [
-      {
-        id: "log-baseline",
-        timestamp: "00:00:00",
-        type: "INFO",
-        message: "Basel III baseline initialized: $16.5M reserve locked, $33.5M surplus deployable across Tiers 1-3.",
-      },
-    ];
+  // Real audit logs for the terminal up to the current replay hour
+  const visibleAuditLogs = useMemo(() => {
+    if (!simResult?.auditLogs) return [];
+    return simResult.auditLogs
+      .filter((log) => log.hour <= replayHour)
+      .map((log, idx) => ({
+        id: `audit-${log.hour}-${idx}`,
+        timestamp: log.timestamp.slice(11, 19),
+        type: (log.type === "MATURITY"
+          ? "MATURE"
+          : log.type === "LIQUIDATION" || log.type === "OVERDRAFT"
+          ? "DEFICIT"
+          : log.type) as "SWEEP" | "MATURE" | "WARN" | "DEFICIT" | "INFO",
+        message: log.message,
+      }));
+  }, [simResult, replayHour]);
 
-    if (replayHour >= 8 || clockHourOfDay >= 8) {
-      logs.push({
-        id: `log-mature-${clockDay}`,
-        timestamp: "08:00:00",
-        type: "MATURE",
-        message: "Tier 1 Repo matured: +$2,450.12 overnight interest credited to Tier 0 Cash.",
-      });
-    }
+  // Real CSV export using RFC 4180 escaping
+  const handleExportAuditCsv = useCallback(() => {
+    if (!simResult) return;
+    const stored = liveDecision ? [liveDecision] : undefined;
+    const csvContent = generateAuditCsv(simResult.auditLogs, stored);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `treasury_audit_h${replayHour}_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [simResult, liveDecision, replayHour]);
 
-    if (replayHour >= 14 || clockHourOfDay >= 14) {
-      logs.push({
-        id: `log-var-${clockDay}`,
-        timestamp: "14:00:00",
-        type: "WARN",
-        message: "Intraday 99% VaR envelope calculated: Reserve ratio healthy at 134% of Basel minimum.",
-      });
-    }
-
-    if (replayHour >= 17 || clockHourOfDay >= 17) {
-      logs.push({
-        id: `log-sweep-${clockDay}`,
-        timestamp: "17:00:00",
-        type: "SWEEP",
-        message: "$18.5M swept into Tier 1 Overnight Repo @ 4.29% APY (maturing 08:00 UTC).",
-      });
-    }
-
-    if (outflowShockPct > 0) {
-      logs.push({
-        id: `log-shock-${replayHour}`,
-        timestamp: `${String(clockHourOfDay).padStart(2, "0")}:15:00`,
-        type: "DEFICIT",
-        message: `Surge shock (+${outflowShockPct}%): Auto-liquidated Tier 1 Repo (0.5% fee). Avoided 12% emergency overdraft penalty.`,
-      });
-    }
-
-    return logs;
-  }, [replayHour, clockHourOfDay, clockDay, outflowShockPct]);
-
-  // Top Bar Badge
+  // Source & Telemetry Badges
   const renderBadge = () => {
     if (isFallback || liveDecision?.source === "offline-fallback" || liveForecast?.source === "offline-fallback") {
       return (
@@ -562,7 +484,7 @@ export default function DashboardPage() {
           data-testid="sample-data-badge"
           className="rounded bg-[#38BDF8]/15 px-2.5 py-1 font-mono text-[11px] font-bold text-[#38BDF8] border border-[#38BDF8]/30"
         >
-          Sample data
+          Local sample simulation
         </span>
       );
     }
@@ -574,6 +496,17 @@ export default function DashboardPage() {
           className="rounded bg-[#38BDF8]/15 px-2.5 py-1 font-mono text-[11px] font-bold text-[#38BDF8] border border-[#38BDF8]/30"
         >
           Synthetic source
+        </span>
+      );
+    }
+
+    if (replaySource === "local-sample") {
+      return (
+        <span
+          data-testid="local-sample-badge"
+          className="rounded bg-[#38BDF8]/15 px-2.5 py-1 font-mono text-[11px] font-bold text-[#38BDF8] border border-[#38BDF8]/30"
+        >
+          Local sample simulation
         </span>
       );
     }
@@ -595,50 +528,36 @@ export default function DashboardPage() {
         clockTimestamp={clockTimestamp}
         isRepoWindowOpen={isRepoWindowOpen}
         isRepoMaturing={isRepoMaturing}
-<<<<<<< HEAD
-        solvencyStatus={effectiveStatus}
-=======
-        repoMaturedYieldUsd={2450.12}
+        repoMaturedYieldUsd={repoMaturedYieldUsd}
         isPlaying={isPlaying}
         playbackSpeed={playbackSpeed}
         onPlayToggle={handlePlayToggle}
         onStepHour={handleStepHour}
         onSpeedChange={(s) => setPlaybackSpeed(s)}
-        source={isFallback ? "offline-fallback" : (liveDecision?.source || undefined)}
-        solvencyStatus={
-          isLive && liveDecision
-            ? (liveDecision.status as "HEALTHY" | "LOW_CONFIDENCE" | "UNDER_RESERVED")
-            : "HEALTHY"
-        }
->>>>>>> 7923846b20c10cf8d3e7c4ae3f001c11522f7215
-        mase={isLive ? (liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? null) : 0.85}
-        confidence={isLive && liveDecision ? liveDecision.confidence : 0.99}
-        deficitAmountUsd={deficitAmountUsd}
+        source={isFallback ? "offline-fallback" : (liveDecision?.source || replaySource)}
+        solvencyStatus={activeFrame?.liquidityStatus ?? "HEALTHY"}
+        mase={liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? 0.85}
+        confidence={liveDecision?.confidence ?? 0.99}
+        deficitAmountUsd={0}
         onTriggerSweep={handleTriggerSweep}
         onRunStressTest={handleRunStressTest}
-        onExportAuditCsv={() => {
-          const csv = "timestamp,type,message\n2026-03-14 17:00:00,SWEEP,Tier 1 Repo Swept";
-          const blob = new Blob([csv], { type: "text/csv" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "treasury_audit_log.csv";
-          a.click();
-        }}
+        onExportAuditCsv={handleExportAuditCsv}
       />
 
       {/* Persistent Offline Fallback Banner */}
       {isFallback && (
-        <FallbackBanner onRetry={refresh} requestId={fallbackRequestId} />
+        <FallbackBanner onRetry={refreshDashboard} requestId={fallbackRequestId} />
       )}
-
 
       {/* Sub-header: Data badges & Run Engine action */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-1">
         <div className="flex items-center gap-2">
           {renderBadge()}
           <span className="text-xs font-mono text-[#94A3B8]">
-            BASEL III LIQUIDITY WORKSTATION · DESIGN 3
+            BASEL III LIQUIDITY WORKSTATION
+          </span>
+          <span className="text-[11px] font-mono text-[#94A3B8]/60">
+            · Active Frame H{replayHour}
           </span>
         </div>
 
@@ -688,89 +607,168 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Loading State Skeleton */}
-      {status === "loading" && (
+      {/* Dashboard Loading State */}
+      {dashboardStatus === "loading" && (
         <div data-testid="dashboard-loading" aria-busy="true" className="py-8">
           <LoadingState rows={6} />
         </div>
       )}
 
-      {/* Error State */}
-      {status === "error" && (
-        <div data-testid="dashboard-error" className="py-8">
-          <ErrorState message={error || "Failed to load dashboard telemetry."} onRetry={refresh} />
+      {/* Replay Simulation Error Banner */}
+      {replayStatus === "error" && (
+        <div
+          data-testid="replay-error-banner"
+          className="flex items-center justify-between rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs text-red-300"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />
+            <span>Simulation error: {replayError || "Failed to execute timeline simulation."}</span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={refreshReplay}
+            className="border-red-500/40 text-red-300 hover:bg-red-500/20 text-xs h-7 px-3"
+          >
+            <RefreshCw className="mr-1.5 h-3 w-3" /> Retry
+          </Button>
         </div>
       )}
 
-      {/* Empty State */}
-      {status === "empty" && (
+      {/* "No runs yet" Small Alert Banner (renders ABOVE workstation, not replacing it) */}
+      {dashboardStatus === "empty" && (
         <div
           data-testid="dashboard-empty"
-          className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[#1E2536] bg-[#121620] p-10 text-center"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#A3E635]/30 bg-[#A3E635]/10 px-4 py-2.5 text-xs text-[#F8FAFC]"
         >
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#A3E635]/15 text-[#A3E635]">
-            <Play className="h-6 w-6 ml-0.5 fill-current" />
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-[#A3E635]" />
+            <h2 className="font-semibold text-[#F8FAFC]">No runs yet</h2>
+            <span className="text-[#94A3B8]">
+              Run the engine to create the first automated forecast and Basel III reserve decision for this organisation.
+            </span>
           </div>
-          <h2 className="mt-3 text-base font-semibold text-[#F8FAFC]">No runs yet</h2>
-          <p className="mt-1 max-w-sm text-xs text-[#94A3B8]">
-            Run the engine to create the first automated forecast and Basel III reserve decision for
-            this organisation.
-          </p>
           {canRunEngine && (
-            <div className="mt-4">
-              <Button
-                type="button"
-                onClick={() => run()}
-                disabled={isRunning || retryAfterSeconds !== null}
-                className="bg-[#A3E635] text-[#0B0E14] font-semibold hover:bg-[#86efac] gap-1.5 border-none"
-              >
-                {isRunning ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Running engine...</span>
-                  </>
-                ) : retryAfterSeconds !== null ? (
-                  <span>Retry in {retryAfterSeconds}s</span>
-                ) : (
-                  <>
-                    <Play className="h-4 w-4 fill-current" />
-                    <span>Run engine</span>
-                  </>
-                )}
-              </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => run()}
+              disabled={isRunning || retryAfterSeconds !== null}
+              className="bg-[#A3E635] text-[#0B0E14] font-semibold hover:bg-[#86efac] gap-1.5 border-none h-7 px-2.5 text-xs"
+            >
+              <Play className="h-3 w-3 fill-current" />
+              <span>Run engine</span>
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Dashboard Data Error State */}
+      {dashboardStatus === "error" && (
+        <div data-testid="dashboard-error" className="py-2">
+          <ErrorState
+            message={dashboardError || "Failed to load stored dashboard records."}
+            onRetry={refreshDashboard}
+          />
+        </div>
+      )}
+
+      {/* Stored Live Decision Card (if present) - Shown alongside replay, not overriding it */}
+      {liveDecision && (
+        <div
+          data-testid="last-stored-decision-card"
+          className="rounded-xl border border-[#38BDF8]/30 bg-[#0B0E14] p-4 text-xs"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1E2536] pb-2 mb-3">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-[#38BDF8]" />
+              <span className="font-semibold text-[#F8FAFC]">Last Stored Decision</span>
+              <span className="rounded bg-[#38BDF8]/15 px-2 py-0.5 font-mono text-[10px] font-bold text-[#38BDF8] border border-[#38BDF8]/30">
+                Source: Stored Firestore Run
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] text-[#94A3B8]">
+                Status: {liveDecision.status}
+              </span>
+              <span className="font-mono text-[10px] text-[#94A3B8]">
+                ID: {liveDecision.id.slice(0, 12)}...
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+            <div>
+              <div className="text-[10px] text-[#94A3B8]">Stored Reserve</div>
+              <div className="text-sm font-bold text-[#F8FAFC]">
+                {formatCompactMinor(liveDecision.reserveMinor)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#94A3B8]">Stored Surplus</div>
+              <div className="text-sm font-bold text-[#38BDF8]">
+                {formatCompactMinor(liveDecision.surplusMinor)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#94A3B8]">Stored Available Cash</div>
+              <div className="text-sm font-bold text-[#A3E635]">
+                {formatCompactMinor(liveDecision.availableCashMinor)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#94A3B8]">Expected Net Yield</div>
+              <div className="text-sm font-bold text-[#F59E0B]">
+                {formatCompactMinor(liveDecision.expectedNetYieldMinor)}
+              </div>
+            </div>
+          </div>
+          {liveDecision.allocations && liveDecision.allocations.length > 0 && (
+            <div className="mt-3 pt-2 border-t border-[#1E2536] flex flex-wrap gap-2">
+              <span className="text-[10px] text-[#94A3B8]">Stored Allocations:</span>
+              {liveDecision.allocations.map((alloc) => (
+                <span
+                  key={alloc.instrumentId}
+                  className="rounded bg-[#1E2536] px-2 py-0.5 text-[10px] font-mono text-[#F8FAFC]"
+                >
+                  <span>{alloc.name}</span>: <span>{formatCompactMinor(alloc.amountMinor)}</span>
+                </span>
+              ))}
             </div>
           )}
         </div>
       )}
 
-      {/* Main 3-Column Institutional Workstation Layout */}
-      {(status === "ready" || status === "unauthenticated") && (
+      {/* Replay Loading Skeleton */}
+      {replayStatus === "loading" && !simResult && (
+        <div data-testid="replay-loading" aria-busy="true" className="py-8">
+          <LoadingState rows={6} />
+        </div>
+      )}
+
+      {/* Main 3-Column Institutional Workstation Layout (Renders whenever replay result is ready) */}
+      {simResult && (
         <div className="grid grid-cols-1 xl:grid-cols-[1fr_340px] 2xl:grid-cols-[1fr_380px] gap-4 items-start">
-          {/* CENTER CANVAS */}
+          {/* CENTER CANVAS (Rows 1, 2, 3) */}
           <div className="flex flex-col gap-4 min-w-0">
-            {/* ROW 1: 4 Top KPI Cards */}
+            {/* Panel Source Label for Replay Telemetry */}
+            <div className="flex items-center justify-between px-1 text-[11px] font-mono text-[#94A3B8]">
+              <div className="flex items-center gap-1.5">
+                <Activity className="h-3.5 w-3.5 text-[#A3E635]" />
+                <span className="font-semibold text-[#F8FAFC]">Active Replay Telemetry</span>
+                <span>(Panel Source: Replay Frame H{replayHour} · {replaySource === "live-api" ? "Live API" : "Local Engine"})</span>
+              </div>
+              <div>Timestamp: {clockTimestamp}</div>
+            </div>
+
+            {/* ROW 1: 4 Top KPI Cards derived from activeFrame */}
             <KpiGrid
               availableCashMinor={availableCashMinor}
               requiredReserveMinor={requiredReserveMinor}
               deployableSurplusMinor={deployableSurplusMinor}
               netYieldMinor={netYieldMinor}
-              annualizedApyPct={4.62}
+              annualizedApyPct={simResult.summary?.annualizedNetReturnPct ?? 4.62}
               isLive={isLive}
-            />
-
-            {/* Plain-English Explainability Card (Criterion 4) */}
-            <ExplainabilityCard
-              status={effectiveStatus}
-              availableCashMinor={availableCashMinor}
-              requiredReserveMinor={requiredReserveMinor}
-              deployableSurplusMinor={deployableSurplusMinor}
-              expectedFlowMinor={2_000_000_00n}
-              tailShortfallMinor={-3_500_000_00n}
-              operationalFloorMinor={5_000_000_00n}
-              stressAddOnMinor={stressAddOnMinor}
-              mase={isLive ? (liveDecision?.backtest?.mase ?? liveForecast?.backtest?.mase ?? null) : 0.85}
-              confidence={isLive && liveDecision ? liveDecision.confidence : 0.99}
-              explanation={liveDecision?.explanation}
             />
 
             {/* ROW 2: Analytical Visualizations (Forecast Chart + Donut) */}
@@ -805,7 +803,7 @@ export default function DashboardPage() {
                 }
               />
 
-              {/* Right: 4-Tier Asset Vault Donut */}
+              {/* Right: 4-Tier Asset Vault Donut derived from activeFrame */}
               <AssetAllocationDonut
                 cashMinor={donutBalances.cashMinor}
                 repoMinor={donutBalances.repoMinor}
@@ -824,7 +822,9 @@ export default function DashboardPage() {
                       Economic Alpha & Opportunity Cost Analysis
                     </h3>
                     <span className="rounded bg-[#A3E635]/15 border border-[#A3E635]/30 px-2 py-0.5 text-[10px] font-mono font-bold text-[#A3E635]">
-                      +$1,542,120 NET ADVANTAGE
+                      {netYieldMinor > 0n
+                        ? `+${formatCurrency(Number(netYieldMinor) / 100)} NET ADVANTAGE`
+                        : "+$0.00 NET ADVANTAGE"}
                     </span>
                   </div>
                   <p className="mt-0.5 text-xs text-[#94A3B8]">
@@ -877,7 +877,9 @@ export default function DashboardPage() {
                   <div className="mt-3 space-y-2">
                     <div className="flex justify-between items-baseline">
                       <span className="text-xs text-[#94A3B8]">Yield Earned:</span>
-                      <span className="font-mono text-sm font-bold text-[#A3E635]">+$342,120</span>
+                      <span className="font-mono text-sm font-bold text-[#A3E635]">
+                        +{formatCurrency(Number(netYieldMinor) / 100)}
+                      </span>
                     </div>
                     <div className="flex justify-between items-baseline">
                       <span className="text-xs text-[#94A3B8]">Overdraft Fees:</span>
@@ -885,14 +887,16 @@ export default function DashboardPage() {
                     </div>
                     <div className="flex justify-between items-baseline">
                       <span className="text-xs text-[#94A3B8]">Surplus Efficiency:</span>
-                      <span className="font-mono text-xs text-[#38BDF8]">67.0% deployed across Tiers 1-3</span>
+                      <span className="font-mono text-xs text-[#38BDF8]">
+                        Dynamic Basel III allocation across Tiers 1-3
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* ROW 3: 4-Tier Holdings & Liquidation Priority Ledger */}
+            {/* ROW 3: 4-Tier Holdings & Liquidation Priority Ledger derived from activeFrame */}
             <TierLedgerTable
               items={tierLedgerItems}
               totalAssetsMinor={
@@ -903,16 +907,24 @@ export default function DashboardPage() {
               }
             />
 
-            {/* ROW 4: Demonstrable Economic Alpha Comparison (Criterion 2) */}
+            {/* ROW 4: Demonstrable Economic Alpha Comparison */}
             <AlphaComparison
-              grossYieldEarnedUsd={354_620}
-              penaltiesIncurredUsd={12_500}
+              grossYieldEarnedUsd={
+                activeFrame?.portfolio
+                  ? Number(activeFrame.portfolio.cumulativeGrossYieldEarned.amountMinor) / 100
+                  : 354_620
+              }
+              penaltiesIncurredUsd={
+                activeFrame?.portfolio
+                  ? Number(activeFrame.portfolio.cumulativePenaltiesPaid.amountMinor) / 100
+                  : 12_500
+              }
               avoidedOverdraftFeesUsd={1_240_000}
               netApyPct={4.62}
             />
           </div>
 
-          {/* RIGHT COLUMN: Command & Execution Rail with Live Auto-scrolling Audit Terminal */}
+          {/* RIGHT COLUMN: Command & Execution Rail with Real Audit Terminal */}
           <div className="w-full">
             <RightCommandPanel
               currentHour={replayHour}
@@ -923,23 +935,22 @@ export default function DashboardPage() {
               onSpeedChange={(s) => setPlaybackSpeed(s)}
               onJumpPreset={handleJumpPreset}
               onApplyPreset={handleApplyPreset}
+              firstSweepHour={firstSweepHour}
+              firstLiquidationHour={firstLiquidationHour}
+              onJumpToFirstSweep={handleJumpToFirstSweep}
+              onJumpToFirstLiquidation={handleJumpToFirstLiquidation}
               outflowShockPct={outflowShockPct}
               onOutflowShockChange={(val) => setOutflowShockPct(val)}
               settlementDelayHours={settlementDelayHours}
               onSettlementDelayChange={(val) => setSettlementDelayHours(val)}
               rateSpikeActive={rateSpikeActive}
               onRateSpikeToggle={(active) => setRateSpikeActive(active)}
-<<<<<<< HEAD
-              auditLogs={dynamicAuditLogs}
-=======
-              auditLogs={liveAuditLogs}
->>>>>>> 7923846b20c10cf8d3e7c4ae3f001c11522f7215
+              auditLogs={visibleAuditLogs}
               totalCashUsd={Number(availableCashMinor) / 100}
             />
           </div>
         </div>
       )}
-
     </div>
   );
 }

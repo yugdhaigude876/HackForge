@@ -32,7 +32,6 @@ export function LoginForm() {
     signInWithEmail,
     signUpWithEmail,
     signInWithGoogle,
-    signInAsDemoUser,
     clearError,
   } = useAuth();
 
@@ -103,20 +102,11 @@ export function LoginForm() {
     }
   };
 
-  const handleDemoSignIn = async (role: "analyst" | "risk_officer" | "cfo") => {
+  const handleDemoFillEmail = (demoEmail: string) => {
     setLocalError(null);
     clearError();
-    setSubmitting(true);
-    try {
-      await signInAsDemoUser(role);
-      router.replace(redirectUrl);
-    } catch (err) {
-      if (err instanceof Error) {
-        setLocalError(err.message);
-      }
-    } finally {
-      setSubmitting(false);
-    }
+    setEmail(demoEmail);
+    setMode("signin");
   };
 
   const activeError = localError || authError;
@@ -414,15 +404,15 @@ export function LoginForm() {
           <div className="mt-6 rounded-md border border-border/60 bg-surface-2/40 p-3">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted">
               <Zap className="h-3 w-3 text-warning" />
-              <span>One-Click Demo Personas</span>
+              <span>Demo Persona Emails</span>
             </div>
-            <p className="mt-1 text-[11px] text-muted">Instant authorization for development and testing:</p>
+            <p className="mt-1 text-[11px] text-muted">Quick-fill role email for testing (requires password):</p>
             <div className="mt-2.5 flex flex-wrap gap-1.5">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => handleDemoSignIn("analyst")}
+                onClick={() => handleDemoFillEmail("analyst@reservejuggler.internal")}
                 disabled={submitting}
                 className="text-[11px] h-7 px-2.5 bg-surface hover:bg-surface-2"
               >
@@ -432,7 +422,7 @@ export function LoginForm() {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => handleDemoSignIn("risk_officer")}
+                onClick={() => handleDemoFillEmail("risk@reservejuggler.internal")}
                 disabled={submitting}
                 className="text-[11px] h-7 px-2.5 bg-surface hover:bg-surface-2"
               >
@@ -442,7 +432,7 @@ export function LoginForm() {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => handleDemoSignIn("cfo")}
+                onClick={() => handleDemoFillEmail("cfo@reservejuggler.internal")}
                 disabled={submitting}
                 className="text-[11px] h-7 px-2.5 bg-surface hover:bg-surface-2"
               >

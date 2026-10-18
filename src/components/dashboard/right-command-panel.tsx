@@ -28,6 +28,10 @@ export interface RightCommandPanelProps {
   rateSpikeActive?: boolean;
   onRateSpikeToggle?: (active: boolean) => void;
   onApplyPreset?: (preset: "normal" | "payday" | "black_swan") => void;
+  firstSweepHour?: number | null;
+  firstLiquidationHour?: number | null;
+  onJumpToFirstSweep?: () => void;
+  onJumpToFirstLiquidation?: () => void;
   auditLogs?: Array<{
     id: string;
     timestamp: string;
@@ -79,6 +83,10 @@ export function RightCommandPanel({
   rateSpikeActive,
   onRateSpikeToggle,
   onApplyPreset,
+  firstSweepHour,
+  firstLiquidationHour,
+  onJumpToFirstSweep,
+  onJumpToFirstLiquidation,
   auditLogs = DEFAULT_AUDIT_LOGS,
   totalCashUsd = 50_000_000,
 }: RightCommandPanelProps) {
@@ -254,6 +262,40 @@ export function RightCommandPanel({
               <span>Black Swan Liquidity Run</span>
               <span className="font-mono text-[10px] text-[#EF4444] font-bold">+45% Outflow Run</span>
             </button>
+            {onJumpToFirstSweep && (
+              <button
+                type="button"
+                onClick={onJumpToFirstSweep}
+                disabled={firstSweepHour == null}
+                className={`flex items-center justify-between rounded bg-[#121620] px-2.5 py-1.5 text-left text-[11px] font-medium border transition-colors ${
+                  firstSweepHour != null
+                    ? "text-[#A3E635] border-[#A3E635]/30 hover:bg-[#1A202C]"
+                    : "text-[#94A3B8]/40 border-[#1E2536] cursor-not-allowed"
+                }`}
+              >
+                <span>Jump to first sweep</span>
+                <span className="font-mono text-[10px]">
+                  {firstSweepHour != null ? `H${firstSweepHour}` : "None"}
+                </span>
+              </button>
+            )}
+            {onJumpToFirstLiquidation && (
+              <button
+                type="button"
+                onClick={onJumpToFirstLiquidation}
+                disabled={firstLiquidationHour == null}
+                className={`flex items-center justify-between rounded bg-[#121620] px-2.5 py-1.5 text-left text-[11px] font-medium border transition-colors ${
+                  firstLiquidationHour != null
+                    ? "text-[#F59E0B] border-[#F59E0B]/30 hover:bg-[#1A202C]"
+                    : "text-[#94A3B8]/40 border-[#1E2536] cursor-not-allowed"
+                }`}
+              >
+                <span>Jump to first liquidation</span>
+                <span className="font-mono text-[10px]">
+                  {firstLiquidationHour != null ? `H${firstLiquidationHour}` : "None"}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </div>
