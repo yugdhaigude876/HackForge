@@ -17,6 +17,8 @@ export async function GET(): Promise<NextResponse> {
           projectsMatch: boolean;
           authAdmin: "ok" | "failed";
           authAdminErrorCode?: string;
+          authAdminErrorName?: string;
+          authAdminErrorHint?: string;
         }
       | undefined;
     try {
@@ -24,6 +26,8 @@ export async function GET(): Promise<NextResponse> {
       const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || null;
       let authAdmin: "ok" | "failed" = "ok";
       let authAdminErrorCode: string | undefined;
+      let authAdminErrorName: string | undefined;
+      let authAdminErrorHint: string | undefined;
       try {
         // Confirms the service account may use the Auth Admin API (needed for revocation checks)
         await admin.getAdminAuth().listUsers(1);
@@ -34,6 +38,13 @@ export async function GET(): Promise<NextResponse> {
           typeof authErr === "object" && authErr !== null && "code" in authErr
             ? String((authErr as { code: unknown }).code).slice(0, 80)
             : "unknown";
+        // Error class name and a short, path-stripped message to diagnose bundling problems
+        // (for example a module missing from the serverless bundle). No stack, no credentials.
+        authAdminErrorName = authErr instanceof Error ? authErr.name.slice(0, 60) : typeof authErr;
+        authAdminErrorHint =
+          authErr instanceof Error
+            ? authErr.message.replace(/\/[\w./@-]+/g, "<path>").replace(/[A-Za-z0-9_-]{30,}/g, "<redacted>").slice(0, 140)
+            : undefined;
       }
       config = {
         adminProjectId,
@@ -41,6 +52,8 @@ export async function GET(): Promise<NextResponse> {
         projectsMatch: adminProjectId !== null && adminProjectId === clientProjectId,
         authAdmin,
         ...(authAdminErrorCode ? { authAdminErrorCode } : {}),
+        ...(authAdminErrorName ? { authAdminErrorName } : {}),
+        ...(authAdminErrorHint ? { authAdminErrorHint } : {}),
       };
     } catch {
       config = undefined;
